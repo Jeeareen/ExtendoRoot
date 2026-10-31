@@ -75,6 +75,9 @@ var _is_lmb_down: bool = false
 var _is_mmb_down: bool = false
 var _has_last_drag_cell: bool = false
 var _last_drag_cell: Vector2i = Vector2i.ZERO
+# Tracks recent brush centers along the active drag so self-overlap is allowed while foreign roots keep a 1-cell gap
+var _active_drag_Safe_tiles: Dictionary = {}
+var _active_drag_history: Array = []
 var _soil_scroll_y: float = 0.0
 
 # Water collection & Leaf spritesheet configuration
@@ -86,9 +89,9 @@ const SPRITE_RECT_LARGELEAVES := Rect2(0, 40, 40, 40)
 const SPRITE_RECT_SMALLLEAVES := Rect2(40, 40, 40, 40)
 const SPRITE_RECT_DRYLEAVES := Rect2(80, 40, 40, 40)
 
-# Water depletion rate when no active connection to water:
-# Tree loses 1.5 water per second when not actively connected to water.
-const WATER_DECAY_RATE := 1.5
+const INITIAL_WATER := 50.0
+const MAX_WATER_STORED := 200.0
+const DRY_WATER_THRESHOLD := 50.0
 
 const MAX_TREE_HEALTH := 100.0
 # Health decay rate per second when disconnected from water
@@ -96,10 +99,25 @@ const HEALTH_DECAY_RATE := 3.0
 # Health recovery rate per second when sucking water
 const HEALTH_REGEN_RATE := 8.0
 
+const MAX_AIR_POLLUTION := 100.0
+# Pollution rise rate per second when leaves are dry
+const POLLUTION_RISE_RATE := 2.5
+# Pollution decrease rates per second for green leaf sizes (small, mid, large)
+const POLLUTION_DECAY_SMALL := 1.2
+const POLLUTION_DECAY_MID := 2.8
+const POLLUTION_DECAY_LARGE := 5.0
+
 var _tree_texture: Texture2D = null
 var _vt323_font: Font = null
-var _water_stored: float = 0.0
-var _tree_health: float = 25.0 # Starts at initial stage (small dry tree)
+var _root_grow_player: AudioStreamPlayer = null
+const ROOT_SFX_HOLD_TIME := 0.14
+var _root_sfx_timer: float = 0.0
+var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
+var _tree_health: float = 25.0 # Starts at initial stage (small tree)
+var _air_pollution: float = 35.0
+var _is_game_over: bool = false
+var _game_over_reason: String = ""
+var _is_grow_btn_hovered: bool = false
 var _is_connected_to_water: bool = false
 var _active_water_intake_rate: float = 0.0
 
@@ -144,6 +162,13 @@ func _ready() -> void:
 		if _rocks_texture:
 			_rocks_image = _rocks_texture.get_image()
 	_vt323_font = load("res://assets/VT323-Regular.ttf")
+	if ResourceLoader.exists("res://assets/root_grow.mp3"):
+		var sfx_stream := load("res://assets/root_grow.mp3")
+		if sfx_stream is AudioStreamMP3:
+			sfx_stream.loop = true
+		_root_grow_player = AudioStreamPlayer.new()
+		_root_grow_player.stream = sfx_stream
+		add_child(_root_grow_player)
 	_wind_rng.randomize()
 	get_viewport().size_changed.connect(_on_size_changed)
 	_generate_world()
@@ -151,6 +176,18 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if _is_game_over:
+		if _root_grow_player and _root_grow_player.playing:
+			_root_grow_player.stop()
+		return
+
+	if _root_sfx_timer > 0.0:
+		_root_sfx_timer = maxf(0.0, _root_sfx_timer - delta)
+		if _root_sfx_timer <= 0.0 or not _is_lmb_down:
+			_root_sfx_timer = 0.0
+			if _root_grow_player and _root_grow_player.playing:
+				_root_grow_player.stop()
+
 	var needs_redraw := false
 	var intake_this_frame := 0.0
 	var connected_now := false
@@ -164,10 +201,10 @@ func _process(delta: float) -> void:
 		if _is_root_touching_bank(bank):
 			connected_now = true
 			var layer_time: float = bank["layer_time"]
-			# Drain rate in water cells per second = width / layer_time = 1.0 / 0.4 = 2.5 cells/sec
+			# Drain rate in water cells per second = width / layer_time = 1.0 / 0.4 = 2.5 cells/sec (1px = 1L)
 			var cells_per_second: float = float(rect.size.x) / layer_time
 			var absorbed: float = cells_per_second * delta
-			_water_stored = minf(_water_stored + absorbed, 200.0)
+			_water_stored = minf(_water_stored + absorbed, MAX_WATER_STORED)
 			intake_this_frame += cells_per_second
 
 			bank["drain_timer"] += delta
@@ -180,19 +217,36 @@ func _process(delta: float) -> void:
 	_is_connected_to_water = connected_now
 	_active_water_intake_rate = intake_this_frame
 
-	# When connected to water, health increases; when disconnected, health decreases over time
-	if connected_now:
-		var old_hp := _tree_health
-		_tree_health = minf(MAX_TREE_HEALTH, _tree_health + HEALTH_REGEN_RATE * delta)
-		if not is_equal_approx(old_hp, _tree_health):
-			needs_redraw = true
+	# Tree health decreases continuously over time (even when drawing water), and only increases via GROW TREE
+	var old_hp := _tree_health
+	_tree_health = maxf(0.0, _tree_health - HEALTH_DECAY_RATE * delta)
+	if not is_equal_approx(old_hp, _tree_health):
+		needs_redraw = true
+
+	# Update air pollution based on tree health & leaf state:
+	# When health > 20, the tree has green leaves and decreases air pollution at a rate scaled by tree health
+	# (slowly at 20-40 HP, faster as health approaches 80-100 HP). When <= 20 HP (dry leaves), pollution rises.
+	var old_pollution := _air_pollution
+	if _tree_health <= 20.0:
+		_air_pollution = minf(MAX_AIR_POLLUTION, _air_pollution + POLLUTION_RISE_RATE * delta)
 	else:
-		if _water_stored > 0.0:
-			_water_stored = maxf(0.0, _water_stored - WATER_DECAY_RATE * delta)
-		var old_hp := _tree_health
-		_tree_health = maxf(0.0, _tree_health - HEALTH_DECAY_RATE * delta)
-		if not is_equal_approx(old_hp, _tree_health):
-			needs_redraw = true
+		var health_factor := clampf((_tree_health - 20.0) / 80.0, 0.0, 1.0)
+		var decay_rate := lerpf(POLLUTION_DECAY_SMALL, POLLUTION_DECAY_LARGE, health_factor)
+		_air_pollution = maxf(0.0, _air_pollution - decay_rate * delta)
+
+	if not is_equal_approx(old_pollution, _air_pollution):
+		needs_redraw = true
+
+	# Check Game Over conditions: air pollution reaches max or water reaches 0
+	if _air_pollution >= MAX_AIR_POLLUTION:
+		_is_game_over = true
+		_game_over_reason = "AIR POLLUTION REACHED 100%"
+		needs_redraw = true
+	elif _water_stored <= 0.0:
+		_water_stored = 0.0
+		_is_game_over = true
+		_game_over_reason = "WATER DEPLETED (0L)"
+		needs_redraw = true
 
 	if _update_wind(delta):
 		needs_redraw = true
@@ -208,14 +262,58 @@ func _process(delta: float) -> void:
 
 
 func _get_target_leaf_rect() -> Rect2:
-	if _tree_health <= 15.0:
+	# When tree health is <= 20, leaves are dry; beyond 20, sprites are green leaves scaled by health
+	if _tree_health <= 20.0:
 		return SPRITE_RECT_DRYLEAVES
 	elif _tree_health < 50.0:
 		return SPRITE_RECT_SMALLLEAVES
-	elif _tree_health < 85.0:
+	elif _tree_health < 80.0:
 		return SPRITE_RECT_MIDLEAVES
 	else:
 		return SPRITE_RECT_LARGELEAVES
+
+
+func _grow_tree_to_next_state() -> void:
+	if _is_game_over:
+		return
+	# Require strictly more than 50L of water to grow, and consume 50L
+	if _water_stored <= 50.0:
+		return
+
+	_water_stored -= 50.0
+
+	if _tree_health <= 20.0:
+		_tree_health = 35.0
+	elif _tree_health < 50.0:
+		_tree_health = 65.0
+	elif _tree_health < 80.0:
+		_tree_health = 90.0
+	else:
+		_tree_health = MAX_TREE_HEALTH
+	queue_redraw()
+
+
+func _get_grow_button_rect(size: Vector2, mid: float) -> Rect2:
+	var btn_side := 84.0
+	var margin := 16.0
+	return Rect2(Vector2(size.x - btn_side - margin, mid - btn_side - margin), Vector2(btn_side, btn_side))
+
+
+func _restart_game() -> void:
+	_water_stored = INITIAL_WATER
+	_tree_health = 25.0
+	_air_pollution = 35.0
+	_is_game_over = false
+	_game_over_reason = ""
+	_current_leaf_rect = _get_target_leaf_rect()
+	_prev_leaf_rect = _current_leaf_rect
+	_current_trunk_rect = _get_target_trunk_rect()
+	_prev_trunk_rect = _current_trunk_rect
+	_leaf_dissolve_t = 1.0
+	_trunk_dissolve_t = 1.0
+	_soil_scroll_y = 0.0
+	_generate_world()
+	queue_redraw()
 
 
 func _get_target_trunk_rect() -> Rect2:
@@ -261,7 +359,7 @@ func _update_tree_transitions(delta: float) -> bool:
 
 
 func _pick_current_leaf_color() -> Color:
-	if _tree_health <= 15.0:
+	if _get_target_leaf_rect() == SPRITE_RECT_DRYLEAVES:
 		var r := _wind_rng.randf()
 		if r < 0.55:
 			return SPRITE_LEAF_DRY_YELLOW
@@ -411,15 +509,33 @@ func _clamp_scroll() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
+	var grow_btn_rect := _get_grow_button_rect(size, mid)
 
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
+			if _is_game_over:
+				if event.pressed:
+					_restart_game()
+				return
+
+			if event.pressed and grow_btn_rect.has_point(event.position):
+				_is_lmb_down = false
+				_grow_tree_to_next_state()
+				return
+
 			_is_lmb_down = event.pressed
 			if _is_lmb_down:
 				_has_last_drag_cell = false
+				_active_drag_Safe_tiles.clear()
+				_active_drag_history.clear()
 				_interact_at_pos(event.position)
 			else:
 				_has_last_drag_cell = false
+				_active_drag_Safe_tiles.clear()
+				_active_drag_history.clear()
+				_root_sfx_timer = 0.0
+				if _root_grow_player and _root_grow_player.playing:
+					_root_grow_player.stop()
 
 		elif event.button_index == MOUSE_BUTTON_MIDDLE:
 			_is_mmb_down = event.pressed
@@ -437,6 +553,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				queue_redraw()
 
 	elif event is InputEventMouseMotion:
+		var hovered := grow_btn_rect.has_point(event.position)
+		if hovered != _is_grow_btn_hovered:
+			_is_grow_btn_hovered = hovered
+			queue_redraw()
+
+		if _is_game_over:
+			return
+
 		if _is_lmb_down:
 			_interact_at_pos(event.position)
 		if _is_mmb_down and event.position.y >= mid:
@@ -445,7 +569,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ESCAPE:
+		if event.keycode == KEY_R and _is_game_over:
+			_restart_game()
+		elif event.keycode == KEY_ESCAPE:
 			var mode := DisplayServer.window_get_mode()
 			if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
 				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -541,17 +667,25 @@ func _interact_at_pos(screen_pos: Vector2) -> void:
 	_has_last_drag_cell = true
 
 	if changed:
+		_root_sfx_timer = ROOT_SFX_HOLD_TIME
+		if _root_grow_player and not _root_grow_player.playing:
+			_root_grow_player.play()
 		queue_redraw()
 
 
 func _try_extend_root_at_cell(cell: Vector2i) -> bool:
 	if cell.y < 0 or cell.y >= TOTAL_SOIL_ROWS:
 		return false
+	if _water_stored < 1.0:
+		return false
 	if _is_cell_water(cell) or _rock_cells.has(cell):
 		return false
 
+	# If this is the start of a drag and the user clicks on or next to an existing root,
+	# seed the safe zone around the starting root connection point so we can branch out cleanly.
+	var is_branch_start := _active_drag_history.is_empty()
+
 	# Find minimum depth among existing root tiles in or adjacent to this cell
-	# (Checking cell itself allows continuous extension when the previous step's brush covered this cell)
 	var parent_depth := _get_neighbor_min_depth(cell)
 	if _initial_root_tiles.has(cell):
 		parent_depth = 0
@@ -563,6 +697,21 @@ func _try_extend_root_at_cell(cell: Vector2i) -> bool:
 	if parent_depth == -1:
 		return false
 
+	# When already dragging (not the initial branch connection point), only allow extending
+	# from the tip of the active drag so you cannot jump across onto a separate root.
+	if not is_branch_start:
+		var connected_to_active_tip := _active_drag_Safe_tiles.has(cell)
+		if not connected_to_active_tip:
+			for ro in range(-1, 2):
+				for co in range(-1, 2):
+					if _active_drag_Safe_tiles.has(cell + Vector2i(co, ro)):
+						connected_to_active_tip = true
+						break
+				if connected_to_active_tip:
+					break
+		if not connected_to_active_tip:
+			return false
+
 	var new_depth := parent_depth + 1
 	if new_depth > MAX_ROOT_STEPS:
 		return false
@@ -572,7 +721,21 @@ func _try_extend_root_at_cell(cell: Vector2i) -> bool:
 		return false
 
 	var half_w := int(w / 2)
-	var changed := false
+
+	# If starting a new branch, mark existing root tiles within a 2-cell radius of the start point
+	# as safe so the new branch can emerge from its parent root, while still blocking other roots.
+	if is_branch_start:
+		var start_safe := {}
+		for ro in range(-half_w - 2, -half_w + w + 2):
+			for co in range(-half_w - 2, -half_w + w + 2):
+				var p := cell + Vector2i(co, ro)
+				if _initial_root_tiles.has(p) or _root_tiles.has(p):
+					start_safe[p] = true
+		_active_drag_history.append(start_safe)
+		_rebuild_active_drag_safe_tiles()
+
+	# Collect candidate cells that this brush step will paint
+	var candidate_cells: Array[Vector2i] = []
 	for r_offset in range(-half_w, -half_w + w):
 		for c_offset in range(-half_w, -half_w + w):
 			var target := cell + Vector2i(c_offset, r_offset)
@@ -581,10 +744,43 @@ func _try_extend_root_at_cell(cell: Vector2i) -> bool:
 			if _is_cell_water(target) or _rock_cells.has(target) or _initial_root_tiles.has(target):
 				continue
 			if not _root_tiles.has(target):
-				_root_tiles[target] = new_depth
-				changed = true
+				candidate_cells.append(target)
 
-	return changed
+	if candidate_cells.is_empty():
+		return false
+
+	# Enforce at least 1px (1 soil cell) space from any other root (including earlier parts of this root if looping back)
+	for target in candidate_cells:
+		for nr in range(-1, 2):
+			for nc in range(-1, 2):
+				var neighbor := target + Vector2i(nc, nr)
+				if _initial_root_tiles.has(neighbor) or _root_tiles.has(neighbor):
+					if not _active_drag_Safe_tiles.has(neighbor):
+						return false
+
+	# Paint the validated cells and record them in the sliding active-tip window
+	var step_painted := {}
+	for target in candidate_cells:
+		_root_tiles[target] = new_depth
+		step_painted[target] = true
+
+	# Extending the root by 1 step (1px along path) draws 1L of water
+	_water_stored = maxf(0.0, _water_stored - 1.0)
+
+	_active_drag_history.append(step_painted)
+	# Keep only the most recent 6 steps in the safe set so looping the same root back on itself is also blocked with a 1-cell gap
+	while _active_drag_history.size() > 6:
+		_active_drag_history.pop_front()
+	_rebuild_active_drag_safe_tiles()
+
+	return true
+
+
+func _rebuild_active_drag_safe_tiles() -> void:
+	_active_drag_Safe_tiles.clear()
+	for step_dict in _active_drag_history:
+		for k in step_dict:
+			_active_drag_Safe_tiles[k] = true
 
 
 func _generate_world() -> void:
@@ -742,6 +938,9 @@ func _draw() -> void:
 	_draw_leaf_particles(mid)
 	_draw_soil_grid(size, mid)
 	_draw_health_bar(size)
+	_draw_grow_button(size, mid)
+	if _is_game_over:
+		_draw_game_over_overlay(size)
 
 
 func _draw_leaf_particles(mid: float) -> void:
@@ -819,6 +1018,105 @@ func _draw_health_bar(_size: Vector2) -> void:
 
 	# Inner outline
 	draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+
+	# --- WATER BAR (right below the health bar) ---
+	var water_bar_pos := Vector2(20.0, 68.0)
+
+	# Title text above the water bar
+	draw_string(_vt323_font, water_bar_pos + Vector2(0.0, -6.0), "WATER", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+
+	# Water amount in Liters on the right (1px water source = 1L)
+	var water_str := "%dL" % int(roundf(_water_stored))
+	draw_string(_vt323_font, water_bar_pos + Vector2(bar_w - 60.0, -6.0), water_str, HORIZONTAL_ALIGNMENT_RIGHT, 60.0, font_size, Color("bfe3f5"))
+
+	# Outer border/drop shadow
+	draw_rect(Rect2(water_bar_pos - Vector2(border_w, border_w), Vector2(bar_w + border_w * 2.0, bar_h + border_w * 2.0)), Color(0, 0, 0, 0.7))
+	# Inner dark background
+	draw_rect(Rect2(water_bar_pos, Vector2(bar_w, bar_h)), Color(0.12, 0.12, 0.12, 0.85))
+
+	var water_ratio := clampf(_water_stored / MAX_WATER_STORED, 0.0, 1.0)
+	var water_fill_w := bar_w * water_ratio
+	if water_fill_w > 0.0:
+		var water_fill_color := WATER_COLOR.lerp(Color("5dade2"), water_ratio)
+		draw_rect(Rect2(water_bar_pos, Vector2(water_fill_w, bar_h)), water_fill_color)
+		draw_rect(Rect2(water_bar_pos, Vector2(water_fill_w, bar_h * 0.4)), Color(1.0, 1.0, 1.0, 0.25))
+
+	# Inner outline
+	draw_rect(Rect2(water_bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+
+	# --- AIR POLLUTION BAR (right below the water bar) ---
+	var poll_bar_pos := Vector2(20.0, 110.0)
+
+	# Title text above the air pollution bar
+	draw_string(_vt323_font, poll_bar_pos + Vector2(0.0, -6.0), "AIR POLLUTION", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+
+	# Pollution percentage on the right
+	var poll_ratio := clampf(_air_pollution / MAX_AIR_POLLUTION, 0.0, 1.0)
+	var poll_str := "%d%%" % int(roundf(poll_ratio * 100.0))
+	draw_string(_vt323_font, poll_bar_pos + Vector2(bar_w - 60.0, -6.0), poll_str, HORIZONTAL_ALIGNMENT_RIGHT, 60.0, font_size, Color("dcdde1"))
+
+	# Outer border/drop shadow
+	draw_rect(Rect2(poll_bar_pos - Vector2(border_w, border_w), Vector2(bar_w + border_w * 2.0, bar_h + border_w * 2.0)), Color(0, 0, 0, 0.7))
+	# Inner dark background
+	draw_rect(Rect2(poll_bar_pos, Vector2(bar_w, bar_h)), Color(0.12, 0.12, 0.12, 0.85))
+
+	var poll_fill_w := bar_w * poll_ratio
+	if poll_fill_w > 0.0:
+		# Smog gray/purple shifting to hazard red as pollution approaches 100%
+		var poll_color: Color
+		if poll_ratio < 0.6:
+			poll_color = Color("7f8fa6").lerp(Color("c23616"), poll_ratio / 0.6 * 0.5)
+		else:
+			poll_color = Color("a05d43").lerp(Color("e84118"), (poll_ratio - 0.6) / 0.4)
+		draw_rect(Rect2(poll_bar_pos, Vector2(poll_fill_w, bar_h)), poll_color)
+		draw_rect(Rect2(poll_bar_pos, Vector2(poll_fill_w, bar_h * 0.4)), Color(1.0, 1.0, 1.0, 0.2))
+
+	# Inner outline
+	draw_rect(Rect2(poll_bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+
+
+func _draw_grow_button(size: Vector2, mid: float) -> void:
+	if not _vt323_font:
+		return
+
+	var btn_rect := _get_grow_button_rect(size, mid)
+	var border_w := 2.0
+
+	# Drop shadow / outer border
+	draw_rect(
+		Rect2(btn_rect.position - Vector2(border_w, border_w), btn_rect.size + Vector2(border_w * 2.0, border_w * 2.0)),
+		Color(0.0, 0.0, 0.0, 0.75)
+	)
+
+	var can_grow := _water_stored > 50.0
+	var bg_col: Color
+	if not can_grow:
+		bg_col = Color("4a4a4a")
+	else:
+		bg_col = Color("4ea83b") if _is_grow_btn_hovered else Color("3b852c")
+	draw_rect(btn_rect, bg_col)
+	# Top highlight
+	draw_rect(Rect2(btn_rect.position, Vector2(btn_rect.size.x, btn_rect.size.y * 0.25)), Color(1.0, 1.0, 1.0, 0.18))
+	# Inner border
+	draw_rect(btn_rect, Color(1.0, 1.0, 1.0, 0.35), false, 1.0)
+
+	# Centered label "GROW" / "TREE" / "(50L)"
+	var text_col := Color.WHITE if can_grow else Color(0.7, 0.7, 0.7, 0.85)
+	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 28.0), "GROW", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
+	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 50.0), "TREE", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
+	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 72.0), "(50L)", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 18, Color("bfe3f5") if can_grow else text_col)
+
+
+func _draw_game_over_overlay(size: Vector2) -> void:
+	if not _vt323_font:
+		return
+
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.72))
+
+	var center_y := size.y * 0.45
+	draw_string(_vt323_font, Vector2(0.0, center_y), "GAME OVER", HORIZONTAL_ALIGNMENT_CENTER, size.x, 72, Color("ff5252"))
+	draw_string(_vt323_font, Vector2(0.0, center_y + 45.0), _game_over_reason, HORIZONTAL_ALIGNMENT_CENTER, size.x, 32, Color.WHITE)
+	draw_string(_vt323_font, Vector2(0.0, center_y + 90.0), "CLICK OR PRESS R TO RESTART", HORIZONTAL_ALIGNMENT_CENTER, size.x, 26, Color("bfe3f5"))
 
 
 func _draw_sky(size: Vector2, mid: float) -> void:
