@@ -24,6 +24,8 @@ const LEAVES_LIGHT := Color("58a84a")
 
 const WATER_COLOR := Color("2980b9")
 const WATER_EDGE := Color("1f5f8b")
+const ACID_WATER_COLOR := Color("16a05d") # Greenish dark-turquoise for acid pools
+const ACID_WATER_EDGE := Color("0e6e3e")
 const ROOT_COLOR := Color("d8a36a")
 
 const TILE_SIZE := 8.0
@@ -89,7 +91,7 @@ const SPRITE_RECT_LARGELEAVES := Rect2(0, 40, 40, 40)
 const SPRITE_RECT_SMALLLEAVES := Rect2(40, 40, 40, 40)
 const SPRITE_RECT_DRYLEAVES := Rect2(80, 40, 40, 40)
 
-const INITIAL_WATER := 50.0
+const INITIAL_WATER := 100.0
 const MAX_WATER_STORED := 200.0
 const DRY_WATER_THRESHOLD := 50.0
 
@@ -108,6 +110,7 @@ const POLLUTION_DECAY_MID := 2.8
 const POLLUTION_DECAY_LARGE := 5.0
 
 var _tree_texture: Texture2D = null
+var _tree_white_texture: Texture2D = null
 var _vt323_font: Font = null
 var _root_grow_player: AudioStreamPlayer = null
 const ROOT_SFX_HOLD_TIME := 0.14
@@ -126,9 +129,8 @@ const WIND_SWAY_FREQ := 5.5
 const WIND_MAX_SWAY_PX := 2.5 # Max leaf sway in sprite pixels
 var _wind_time: float = 0.0
 var _wind_strength: float = 0.0
-var _wind_target_strength: float = 0.8
+var _wind_target_strength: float = 0.85
 var _wind_direction: float = 1.0 # 1.0 = blowing right, -1.0 = blowing left
-var _wind_state_timer: float = 4.0
 var _wind_gust_particles: Array = []
 var _leaf_particles: Array = []
 var _leaf_spawn_timer: float = 0.0
@@ -151,12 +153,41 @@ var _current_trunk_rect: Rect2 = SPRITE_RECT_SMALLROOT
 var _prev_trunk_rect: Rect2 = SPRITE_RECT_SMALLROOT
 var _trunk_dissolve_t: float = 1.0
 
+# Weather cycle (cycles every 5 seconds: Wind -> Heat Wave -> Acid Rain)
+const WEATHER_CYCLE_DURATION := 5.0
+const WEATHER_WIND := 0
+const WEATHER_HEATWAVE := 1
+const WEATHER_ACID_RAIN := 2
+const HEATWAVE_WATER_DRAIN_RATE := 2.0 # 2L per second from water bar and all water sources
+const SKY_HEAT_TOP := Color("ff9f1c")
+const SKY_HEAT_HORIZON := Color("ffe66d")
+const SKY_ACID_TOP := Color("555c60")
+const SKY_ACID_HORIZON := Color("8b9398")
+const SUN_HEAT_COLOR := Color("ffb347")
+var _weather_state: int = WEATHER_WIND
+var _is_heatwave: bool = false
+var _is_acid_rain: bool = false
+var _weather_cycle_timer: float = WEATHER_CYCLE_DURATION
+var _heatwave_intensity: float = 0.0 # Smoothly transitions 0.0 -> 1.0 during heatwave
+var _acid_rain_intensity: float = 0.0 # Smoothly transitions 0.0 -> 1.0 during acid rain
+var _acid_rain_drops: Array = []
+
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	if ResourceLoader.exists("res://assets/tree.png"):
 		_tree_texture = load("res://assets/tree.png")
+		if _tree_texture:
+			var tree_img := _tree_texture.get_image()
+			if tree_img:
+				var white_img := tree_img.duplicate() as Image
+				for py in white_img.get_height():
+					for px in white_img.get_width():
+						var a := white_img.get_pixel(px, py).a
+						if a > 0.0:
+							white_img.set_pixel(px, py, Color(1.0, 1.0, 1.0, a))
+				_tree_white_texture = ImageTexture.create_from_image(white_img)
 	if ResourceLoader.exists("res://assets/Rocks.png"):
 		_rocks_texture = load("res://assets/Rocks.png")
 		if _rocks_texture:
@@ -173,6 +204,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_on_size_changed)
 	_generate_world()
 	_init_wind_particles()
+	_init_acid_rain_drops()
 
 
 func _process(delta: float) -> void:
@@ -198,9 +230,12 @@ func _process(delta: float) -> void:
 		if drained >= rect.size.y:
 			continue # Bank is fully drained
 
-		if _is_root_touching_bank(bank):
+		var is_acid: bool = bank.get("is_acid", false)
+		var layer_time: float = bank["layer_time"]
+		var bank_drained_this_frame := false
+
+		if not is_acid and _is_root_touching_bank(bank):
 			connected_now = true
-			var layer_time: float = bank["layer_time"]
 			# Drain rate in water cells per second = width / layer_time = 1.0 / 0.4 = 2.5 cells/sec (1px = 1L)
 			var cells_per_second: float = float(rect.size.x) / layer_time
 			var absorbed: float = cells_per_second * delta
@@ -208,18 +243,37 @@ func _process(delta: float) -> void:
 			intake_this_frame += cells_per_second
 
 			bank["drain_timer"] += delta
+			bank_drained_this_frame = true
+
+		# Heat wave drains 2L (2 cells) of water per second from every usable water source
+		if _is_heatwave and not is_acid and bank["drained_layers"] < rect.size.y:
+			var heat_timer_advance := (HEATWAVE_WATER_DRAIN_RATE / float(rect.size.x)) * layer_time * delta
+			bank["drain_timer"] += heat_timer_advance
+			bank_drained_this_frame = true
+
+		if bank_drained_this_frame:
 			while bank["drain_timer"] >= layer_time and bank["drained_layers"] < rect.size.y:
 				bank["drain_timer"] -= layer_time
 				bank["drained_layers"] += 1
-
 			needs_redraw = true
 
 	_is_connected_to_water = connected_now
 	_active_water_intake_rate = intake_this_frame
 
-	# Tree health decreases continuously over time (even when drawing water), and only increases via GROW TREE
+	# Heat wave also drains 2L of water per second from our stored water bar
+	if _is_heatwave:
+		var old_water := _water_stored
+		_water_stored = maxf(0.0, _water_stored - HEATWAVE_WATER_DRAIN_RATE * delta)
+		if not is_equal_approx(old_water, _water_stored):
+			needs_redraw = true
+
+	if _update_heatwave(delta):
+		needs_redraw = true
+
+	# Tree health decreases continuously over time (2x faster during a heat wave or acid rain), and only increases via GROW TREE
 	var old_hp := _tree_health
-	_tree_health = maxf(0.0, _tree_health - HEALTH_DECAY_RATE * delta)
+	var current_health_decay := HEALTH_DECAY_RATE * (2.0 if (_is_heatwave or _is_acid_rain) else 1.0)
+	_tree_health = maxf(0.0, _tree_health - current_health_decay * delta)
 	if not is_equal_approx(old_hp, _tree_health):
 		needs_redraw = true
 
@@ -305,6 +359,15 @@ func _restart_game() -> void:
 	_air_pollution = 35.0
 	_is_game_over = false
 	_game_over_reason = ""
+	_weather_state = WEATHER_WIND
+	_is_heatwave = false
+	_is_acid_rain = false
+	_weather_cycle_timer = WEATHER_CYCLE_DURATION
+	_heatwave_intensity = 0.0
+	_acid_rain_intensity = 0.0
+	_wind_strength = 0.0
+	_wind_target_strength = 0.85
+	_wind_direction = -1.0 if _wind_rng.randf() < 0.5 else 1.0
 	_current_leaf_rect = _get_target_leaf_rect()
 	_prev_leaf_rect = _current_leaf_rect
 	_current_trunk_rect = _get_target_trunk_rect()
@@ -314,6 +377,93 @@ func _restart_game() -> void:
 	_soil_scroll_y = 0.0
 	_generate_world()
 	queue_redraw()
+
+
+func _update_heatwave(delta: float) -> bool:
+	var changed := false
+	_weather_cycle_timer -= delta
+	if _weather_cycle_timer <= 0.0:
+		_weather_cycle_timer += WEATHER_CYCLE_DURATION
+		_weather_state = (_weather_state + 1) % 3
+		_is_heatwave = (_weather_state == WEATHER_HEATWAVE)
+		_is_acid_rain = (_weather_state == WEATHER_ACID_RAIN)
+
+		if _weather_state == WEATHER_WIND:
+			_wind_target_strength = _wind_rng.randf_range(0.75, 1.0)
+			_wind_direction = -1.0 if _wind_rng.randf() < 0.5 else 1.0
+		elif _weather_state == WEATHER_HEATWAVE:
+			_wind_target_strength = 0.0
+		elif _weather_state == WEATHER_ACID_RAIN:
+			_wind_target_strength = 0.0
+			_contaminate_unconnected_water_sources()
+		changed = true
+
+	var target_heat := 1.0 if _is_heatwave else 0.0
+	var prev_heat := _heatwave_intensity
+	_heatwave_intensity = move_toward(_heatwave_intensity, target_heat, delta * 0.9)
+	if not is_equal_approx(prev_heat, _heatwave_intensity):
+		changed = true
+
+	var target_acid := 1.0 if _is_acid_rain else 0.0
+	var prev_acid := _acid_rain_intensity
+	_acid_rain_intensity = move_toward(_acid_rain_intensity, target_acid, delta * 0.9)
+	if not is_equal_approx(prev_acid, _acid_rain_intensity):
+		changed = true
+
+	if _acid_rain_intensity > 0.01:
+		var size := get_viewport_rect().size
+		var mid := size.y * 0.5
+		for drop in _acid_rain_drops:
+			drop["y"] += drop["speed"] * delta
+			drop["x"] += drop["vx"] * delta
+			if drop["y"] >= mid:
+				drop["y"] = _wind_rng.randf_range(-40.0, 0.0)
+				drop["x"] = _wind_rng.randf_range(0.0, maxf(size.x, 400.0))
+		changed = true
+
+	return changed
+
+
+func _contaminate_unconnected_water_sources() -> void:
+	# Find all remaining water sources that are neither already acid nor connected to roots
+	var candidates: Array[int] = []
+	for i in _water_banks.size():
+		var bank: Dictionary = _water_banks[i]
+		var rect: Rect2i = bank["rect"]
+		if bank["drained_layers"] >= rect.size.y:
+			continue
+		if bank.get("is_acid", false):
+			continue
+		if _is_root_touching_bank(bank):
+			continue
+		candidates.append(i)
+
+	if candidates.is_empty():
+		return
+
+	# Shuffle candidates and turn 1-2 unconnected water sources into unusable dark-turquoise acid pools
+	var num_to_turn := mini(candidates.size(), _wind_rng.randi_range(1, 2))
+	for n in num_to_turn:
+		var pick_idx := _wind_rng.randi_range(0, candidates.size() - 1)
+		var bank_idx: int = candidates[pick_idx]
+		candidates.remove_at(pick_idx)
+		_water_banks[bank_idx]["is_acid"] = true
+
+
+func _init_acid_rain_drops() -> void:
+	_acid_rain_drops.clear()
+	var size := get_viewport_rect().size
+	var mid := maxf(size.y * 0.5, 200.0)
+	var width := maxf(size.x, 400.0)
+	for i in 48:
+		_acid_rain_drops.append({
+			"x": _wind_rng.randf_range(0.0, width),
+			"y": _wind_rng.randf_range(0.0, mid),
+			"len": _wind_rng.randf_range(10.0, 20.0),
+			"speed": _wind_rng.randf_range(260.0, 380.0),
+			"vx": _wind_rng.randf_range(-18.0, -6.0),
+			"alpha": _wind_rng.randf_range(0.35, 0.7)
+		})
 
 
 func _get_target_trunk_rect() -> Rect2:
@@ -431,21 +581,11 @@ func _init_wind_particles() -> void:
 
 
 func _update_wind(delta: float) -> bool:
-	_wind_state_timer -= delta
-	if _wind_state_timer <= 0.0:
-		# Alternate between windy gusts and calm intervals
-		if _wind_target_strength > 0.15:
-			# Switch to calm or light breeze
-			_wind_target_strength = 0.0 if _wind_rng.randf() < 0.55 else _wind_rng.randf_range(0.25, 0.5)
-			_wind_state_timer = _wind_rng.randf_range(2.5, 5.0)
-		else:
-			# Trigger a wind gust
-			_wind_target_strength = _wind_rng.randf_range(0.65, 1.0)
-			_wind_direction = -1.0 if _wind_rng.randf() < 0.5 else 1.0
-			_wind_state_timer = _wind_rng.randf_range(3.5, 6.5)
+	# Wind is active only during the 10-second wind phase
+	_wind_target_strength = 0.85 if _weather_state == WEATHER_WIND else 0.0
 
 	var prev_strength := _wind_strength
-	_wind_strength = move_toward(_wind_strength, _wind_target_strength, delta * 0.65)
+	_wind_strength = move_toward(_wind_strength, _wind_target_strength, delta * 0.8)
 
 	if _wind_strength > 0.01:
 		_wind_time += delta * (0.6 + _wind_strength * 0.8)
@@ -490,6 +630,7 @@ func _is_root_touching_bank(bank: Dictionary) -> bool:
 func _on_size_changed() -> void:
 	_generate_world()
 	_init_wind_particles()
+	_init_acid_rain_drops()
 	_clamp_scroll()
 	queue_redraw()
 
@@ -630,6 +771,26 @@ func _is_cell_water(cell: Vector2i) -> bool:
 	return cell.y >= current_top
 
 
+func _is_cell_acid_water(cell: Vector2i) -> bool:
+	if not _water_bank_lookup.has(cell):
+		return false
+	var bank_idx: int = _water_bank_lookup[cell]
+	var bank: Dictionary = _water_banks[bank_idx]
+	if not bank.get("is_acid", false):
+		return false
+	var rect: Rect2i = bank["rect"]
+	var current_top: int = rect.position.y + bank["drained_layers"]
+	return cell.y >= current_top
+
+
+func _is_adjacent_to_acid_water(cell: Vector2i) -> bool:
+	for nr in range(-1, 2):
+		for nc in range(-1, 2):
+			if _is_cell_acid_water(cell + Vector2i(nc, nr)):
+				return true
+	return false
+
+
 func _interact_at_pos(screen_pos: Vector2) -> void:
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
@@ -743,6 +904,9 @@ func _try_extend_root_at_cell(cell: Vector2i) -> bool:
 				continue
 			if _is_cell_water(target) or _rock_cells.has(target) or _initial_root_tiles.has(target):
 				continue
+			# Acid pools cannot be connected afterwards (enforce at least 1 cell gap around acid water)
+			if _is_adjacent_to_acid_water(target):
+				return false
 			if not _root_tiles.has(target):
 				candidate_cells.append(target)
 
@@ -850,8 +1014,10 @@ func _generate_water_sources(cols: int, rows: int) -> void:
 	rng.seed = 1337
 
 	var num_sources := clampi(int(cols * rows / 400), 5, 18)
+	var attempts := 0
 
-	for s in num_sources:
+	while _water_banks.size() < num_sources and attempts < 500:
+		attempts += 1
 		var w := rng.randi_range(8, 14)
 		var min_h := int(ceil(64.0 / float(w)))
 		var h := rng.randi_range(min_h, min_h + 3)
@@ -860,6 +1026,17 @@ func _generate_water_sources(cols: int, rows: int) -> void:
 		var origin_y := rng.randi_range(16, maxi(rows - h - 2, 16))
 
 		var rect := Rect2i(origin_x, origin_y, w, h)
+		# Expand check rect by 1 cell so no two water sources overlap or touch each other
+		var padded_rect := rect.grow(1)
+		var overlaps := false
+		for existing_bank in _water_banks:
+			var existing_rect: Rect2i = existing_bank["rect"]
+			if padded_rect.intersects(existing_rect):
+				overlaps = true
+				break
+		if overlaps:
+			continue
+
 		var layer_time := float(w) * 0.4
 		var bank_idx := _water_banks.size()
 
@@ -867,7 +1044,8 @@ func _generate_water_sources(cols: int, rows: int) -> void:
 			"rect": rect,
 			"drained_layers": 0,
 			"drain_timer": 0.0,
-			"layer_time": layer_time
+			"layer_time": layer_time,
+			"is_acid": false
 		})
 
 		for r in h:
@@ -933,7 +1111,11 @@ func _draw() -> void:
 	var mid := size.y * 0.5
 	_draw_sky(size, mid)
 	_draw_hills(size, mid)
+	if _acid_rain_intensity > 0.01:
+		# Overcast grayish tint over the top screen during acid rain (behind the tree)
+		draw_rect(Rect2(0.0, 0.0, size.x, mid), Color(0.32, 0.35, 0.37, 0.65 * _acid_rain_intensity))
 	_draw_wind_gusts(mid)
+	_draw_acid_rain(size, mid)
 	_draw_tree(Vector2(size.x * 0.5, mid), mid)
 	_draw_leaf_particles(mid)
 	_draw_soil_grid(size, mid)
@@ -941,6 +1123,21 @@ func _draw() -> void:
 	_draw_grow_button(size, mid)
 	if _is_game_over:
 		_draw_game_over_overlay(size)
+
+
+func _draw_acid_rain(_size: Vector2, mid: float) -> void:
+	if _acid_rain_intensity <= 0.02:
+		return
+	for drop in _acid_rain_drops:
+		var y: float = drop["y"]
+		if y >= mid or y + drop["len"] <= 0.0:
+			continue
+		var x: float = drop["x"]
+		var len_y: float = drop["len"]
+		var p1 := Vector2(x, maxf(0.0, y))
+		var p2 := Vector2(x - 1.5, minf(mid, y + len_y))
+		var alpha: float = drop["alpha"] * _acid_rain_intensity
+		draw_line(p1, p2, Color("16a05d") if alpha < 0.5 else Color("2ecc71"), 1.5)
 
 
 func _draw_leaf_particles(mid: float) -> void:
@@ -1120,14 +1317,21 @@ func _draw_game_over_overlay(size: Vector2) -> void:
 
 
 func _draw_sky(size: Vector2, mid: float) -> void:
+	# Tint sky/air to a vibrant orange/yellow color at 50% opacity during heatwaves, or overcast gray during acid rain
+	var top_col := SKY_TOP.lerp(SKY_HEAT_TOP, _heatwave_intensity * 0.5).lerp(SKY_ACID_TOP, _acid_rain_intensity * 0.85)
+	var hor_col := SKY_HORIZON.lerp(SKY_HEAT_HORIZON, _heatwave_intensity * 0.5).lerp(SKY_ACID_HORIZON, _acid_rain_intensity * 0.85)
 	draw_polygon(
 		PackedVector2Array([Vector2.ZERO, Vector2(size.x, 0), Vector2(size.x, mid), Vector2(0, mid)]),
-		PackedColorArray([SKY_TOP, SKY_TOP, SKY_HORIZON, SKY_HORIZON])
+		PackedColorArray([top_col, top_col, hor_col, hor_col])
 	)
 	var sun_pos := Vector2(size.x * 0.82, mid * 0.25)
-	var r := mid * 0.1
-	draw_circle(sun_pos, r * 1.5, Color(SUN, 0.25))
-	draw_circle(sun_pos, r, SUN)
+	var base_r := mid * 0.1
+	# Scale sun up to 1.2x and tint slightly orange during heatwave, or dim into gray clouds during acid rain
+	var r := base_r * lerpf(1.0, 1.2, _heatwave_intensity)
+	var sun_col := SUN.lerp(SUN_HEAT_COLOR, _heatwave_intensity).lerp(Color("9aa2a6"), _acid_rain_intensity * 0.75)
+	var sun_alpha := lerpf(1.0, 0.35, _acid_rain_intensity)
+	draw_circle(sun_pos, r * 1.5, Color(sun_col, 0.25 * sun_alpha))
+	draw_circle(sun_pos, r, Color(sun_col, sun_alpha))
 
 
 func _draw_hills(size: Vector2, mid: float) -> void:
@@ -1174,6 +1378,12 @@ func _draw_tree_spritesheet(base: Vector2, _mid: float) -> void:
 	var base_oscillation_x := sway_px * tree_pixel_scale
 	var leaf_offset_x := base_oscillation_x * 0.75
 
+	# Constant warm orange tint during heatwave (0.225 opacity), or 50% of the gray tint on the tree during acid rain
+	var heat_alpha := clampf(_heatwave_intensity, 0.0, 1.0) * 0.225
+	var acid_alpha := clampf(_acid_rain_intensity, 0.0, 1.0) * (0.65 * 0.5)
+	var flash_alpha := maxf(heat_alpha, acid_alpha)
+	var flash_col := Color(1.0, 0.55, 0.15) if heat_alpha >= acid_alpha else Color(0.32, 0.35, 0.37)
+
 	# Draw trunk/roots base sprite with height-dependent bending and cross-dissolve transition:
 	var trunk_t := smoothstep(0.0, 1.0, _trunk_dissolve_t)
 	for row_y in SPRITE_SIZE:
@@ -1191,9 +1401,13 @@ func _draw_tree_spritesheet(base: Vector2, _mid: float) -> void:
 		if trunk_t < 1.0 and _prev_trunk_rect != _current_trunk_rect:
 			var prev_src_row := Rect2(_prev_trunk_rect.position.x, _prev_trunk_rect.position.y + row_y, SPRITE_SIZE, 1.0)
 			draw_texture_rect_region(_tree_texture, dst_row_rect, prev_src_row, Color(1.0, 1.0, 1.0, 1.0 - trunk_t))
+			if flash_alpha > 0.001 and _tree_white_texture:
+				draw_texture_rect_region(_tree_white_texture, dst_row_rect, prev_src_row, Color(flash_col.r, flash_col.g, flash_col.b, (1.0 - trunk_t) * flash_alpha))
 
 		var cur_src_row := Rect2(_current_trunk_rect.position.x, _current_trunk_rect.position.y + row_y, SPRITE_SIZE, 1.0)
 		draw_texture_rect_region(_tree_texture, dst_row_rect, cur_src_row, Color(1.0, 1.0, 1.0, trunk_t))
+		if flash_alpha > 0.001 and _tree_white_texture:
+			draw_texture_rect_region(_tree_white_texture, dst_row_rect, cur_src_row, Color(flash_col.r, flash_col.g, flash_col.b, trunk_t * flash_alpha))
 
 	# Draw leaves on top with smooth cross-dissolve and interpolated vertical offset
 	var leaf_t := smoothstep(0.0, 1.0, _leaf_dissolve_t)
@@ -1201,28 +1415,36 @@ func _draw_tree_spritesheet(base: Vector2, _mid: float) -> void:
 		var prev_offset_y := _prev_leaf_offset_px * tree_pixel_scale
 		var prev_leaf_dest := Rect2(dest_pos + Vector2(leaf_offset_x, -prev_offset_y), scaled_size)
 		draw_texture_rect_region(_tree_texture, prev_leaf_dest, _prev_leaf_rect, Color(1.0, 1.0, 1.0, 1.0 - leaf_t))
+		if flash_alpha > 0.001 and _tree_white_texture:
+			draw_texture_rect_region(_tree_white_texture, prev_leaf_dest, _prev_leaf_rect, Color(flash_col.r, flash_col.g, flash_col.b, (1.0 - leaf_t) * flash_alpha))
 
 	var cur_offset_y := _current_leaf_offset_px * tree_pixel_scale
 	var cur_leaf_dest := Rect2(dest_pos + Vector2(leaf_offset_x, -cur_offset_y), scaled_size)
 	draw_texture_rect_region(_tree_texture, cur_leaf_dest, _current_leaf_rect, Color(1.0, 1.0, 1.0, leaf_t))
+	if flash_alpha > 0.001 and _tree_white_texture:
+		draw_texture_rect_region(_tree_white_texture, cur_leaf_dest, _current_leaf_rect, Color(flash_col.r, flash_col.g, flash_col.b, leaf_t * flash_alpha))
 
 
 func _draw_tree_procedural(base: Vector2, mid: float) -> void:
 	var h := mid * 0.6
 	var w := h * 0.1
+	var heat_alpha := clampf(_heatwave_intensity, 0.0, 1.0) * 0.21
+	var acid_alpha := clampf(_acid_rain_intensity, 0.0, 1.0) * (0.65 * 0.5)
+	var flash_t := maxf(heat_alpha, acid_alpha)
+	var heat_col := Color(1.0, 0.55, 0.15) if heat_alpha >= acid_alpha else Color(0.32, 0.35, 0.37)
 	# Trunk (slightly tapered)
 	draw_colored_polygon(PackedVector2Array([
 		base + Vector2(-w * 0.7, 0), base + Vector2(w * 0.7, 0),
 		base + Vector2(w * 0.4, -h * 0.6), base + Vector2(-w * 0.4, -h * 0.6),
-	]), TRUNK)
+	]), TRUNK.lerp(heat_col, flash_t))
 	# Canopy: layered circles for depth
 	var c := base + Vector2(0, -h * 0.72)
 	var r := h * 0.22
 	for o in [Vector2(-1.1, 0.4), Vector2(1.1, 0.4), Vector2(0, 0.6)]:
-		draw_circle(c + o * r, r, LEAVES_DARK)
+		draw_circle(c + o * r, r, LEAVES_DARK.lerp(heat_col, flash_t))
 	for o in [Vector2(-0.7, -0.3), Vector2(0.7, -0.3), Vector2(0, -0.9), Vector2(0, 0.1)]:
-		draw_circle(c + o * r, r, LEAVES)
-	draw_circle(c + Vector2(-0.3, -0.8) * r, r * 0.5, LEAVES_LIGHT)
+		draw_circle(c + o * r, r, LEAVES.lerp(heat_col, flash_t))
+	draw_circle(c + Vector2(-0.3, -0.8) * r, r * 0.5, LEAVES_LIGHT.lerp(heat_col, flash_t))
 
 
 func _draw_soil_grid(size: Vector2, mid: float) -> void:
@@ -1263,6 +1485,9 @@ func _draw_soil_grid(size: Vector2, mid: float) -> void:
 				var bank: Dictionary = _water_banks[bank_idx]
 				var rect: Rect2i = bank["rect"]
 				var current_top_layer: int = rect.position.y + bank["drained_layers"]
+				var is_acid: bool = bank.get("is_acid", false)
+				var fill_col := ACID_WATER_COLOR if is_acid else WATER_COLOR
+				var edge_col := ACID_WATER_EDGE if is_acid else WATER_EDGE
 
 				if row < current_top_layer:
 					# Layer is already fully drained, soil below shows through
@@ -1276,12 +1501,12 @@ func _draw_soil_grid(size: Vector2, mid: float) -> void:
 
 					if h > 0.001:
 						var water_subrect := Rect2(Vector2(x, y + offset_y), Vector2(TILE_SIZE, h))
-						draw_rect(water_subrect, WATER_COLOR)
-						draw_rect(water_subrect, WATER_EDGE, false, 0.75)
+						draw_rect(water_subrect, fill_col)
+						draw_rect(water_subrect, edge_col, false, 0.75)
 				else:
 					# Untouched water layers below
-					draw_rect(tile_rect, WATER_COLOR)
-					draw_rect(tile_rect, WATER_EDGE, false, 0.75)
+					draw_rect(tile_rect, fill_col)
+					draw_rect(tile_rect, edge_col, false, 0.75)
 
 	# 4. Rocks rendered on the soil grid at 1/3x scale (clipped to visible soil rows)
 	if _rocks_texture:
