@@ -59,7 +59,7 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_rng.randomize()
 	if ResourceLoader.exists("res://assets/tree.png"):
-		_tree_texture = load("res://assets/tree.png")
+		_tree_texture = preload("res://scripts/tree_sprite.gd").get_shaded_texture()
 	if ResourceLoader.exists("res://assets/VT323-Regular.ttf"):
 		_vt323_font = load("res://assets/VT323-Regular.ttf")
 

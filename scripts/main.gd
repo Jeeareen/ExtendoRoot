@@ -26,8 +26,15 @@ const WATER_COLOR := Color("2980b9")
 const WATER_EDGE := Color("1f5f8b")
 const ACID_WATER_COLOR := Color("16a05d") # Greenish dark-turquoise for acid pools
 const ACID_WATER_EDGE := Color("0e6e3e")
-const ROOT_COLOR := Color("965e32")
-const ROOT_EDGE_DARK := Color("6a3c18") # Darker edge for outer regions of wide roots
+const ROOT_COLOR := Color("652300")
+
+# Retro Pixel-Art Bitmask Root Palette (Ağaç Gövdesi #652300 İle Birebir Uyumlu)
+const ROOT_BARK_DARK := Color("1b0800")
+const ROOT_BARK_SHADOW := Color("381300")
+const ROOT_WOOD_CORE := Color("652300")
+const ROOT_WOOD_GRAIN := Color("4e1a00")
+const ROOT_WOOD_LIGHT := Color("853609")
+const ROOT_TIP_COLOR := Color("aa4d18")
 const ROOT_WATER_FLOW := Color("54d6ff")
 
 const TILE_SIZE := 8.0
@@ -200,6 +207,8 @@ func _ready() -> void:
 		if _tree_texture:
 			var tree_img := _tree_texture.get_image()
 			if tree_img:
+				tree_img = preload("res://scripts/tree_sprite.gd").get_shaded_image()
+				_tree_texture = preload("res://scripts/tree_sprite.gd").get_shaded_texture()
 				var white_img := tree_img.duplicate() as Image
 				for py in white_img.get_height():
 					for px in white_img.get_width():
@@ -659,6 +668,7 @@ func _update_tree_transitions(delta: float) -> bool:
 		_prev_trunk_rect = _current_trunk_rect
 		_current_trunk_rect = target_trunk
 		_trunk_dissolve_t = 0.0
+		_refresh_roots_for_trunk()
 		changed = true
 
 	if _leaf_dissolve_t < 1.0:
@@ -1233,14 +1243,40 @@ func _add_brush_tiles(cx: int, cy: int, width: int) -> void:
 				_initial_root_tiles[pos] = true
 
 
+func _get_trunk_base_span(center_col: int) -> Vector2i:
+	# Columns covered by the trunk sprite's base row (y=36), aligned so sprite x=17 sits on column center_col - 2.
+	# Small trunk: x=16..22 (7 wide). Big trunk: x=14..23 (10 wide).
+	if _current_trunk_rect == SPRITE_RECT_BIGROOT:
+		return Vector2i(center_col - 5, center_col + 4)
+	return Vector2i(center_col - 3, center_col + 3)
+
+
+func _refresh_roots_for_trunk() -> void:
+	# Called when the trunk sprite changes: re-shape the top of the initial roots while keeping player-grown roots
+	var size := get_viewport_rect().size
+	var cols := int(ceil(size.x / TILE_SIZE))
+	if cols <= 10:
+		return
+	_build_initial_roots(cols)
+	if _is_connected_to_water:
+		_update_water_flow_path()
+
+
 func _generate_initial_roots(cols: int) -> void:
-	_initial_root_tiles.clear()
 	_root_tiles.clear()
+	_build_initial_roots(cols)
+
+
+func _build_initial_roots(cols: int) -> void:
+	_initial_root_tiles.clear()
 	var center_col := int(cols * 0.5)
 
-	# Main stem root: 4 cells wide at the top, naturally tapering and descending
+	# Main stem root: top rows match the trunk base width (7 for the small trunk, 10 for the big one), then taper down
+	var is_big := _current_trunk_rect == SPRITE_RECT_BIGROOT
+	var top_w := 10 if is_big else 7
+	var mid_w := 7 if is_big else 5
 	for r in 15:
-		var w := 4 if r < 7 else (3 if r < 12 else 2)
+		var w := top_w if r < 2 else (mid_w if r < 4 else (4 if r < 7 else (3 if r < 12 else 2)))
 		_add_brush_tiles(center_col, r, w)
 
 	# Left lateral root branch
@@ -1834,54 +1870,12 @@ func _draw_soil_grid(size: Vector2, mid: float) -> void:
 
 			var is_root: bool = _initial_root_tiles.has(cell) or _root_tiles.has(cell)
 			if is_root:
-				# 1. Base root tile rendering (8x8px square with constant color)
-				var root_col := ROOT_COLOR
-				var w := 0
-				if _root_tiles.has(cell):
-					w = _get_width_for_depth(_root_tiles[cell])
-				elif _initial_root_tiles.has(cell):
-					# Initial root tiles are 3 or 4 wide
-					w = 4
-
-				# When width is 1 or 2, use the outer root color;
-				# For wider roots (width 3/4), outer regions (having an edge to soil) use outer color while core remains ROOT_COLOR
-				if w <= 2:
-					root_col = ROOT_EDGE_DARK
-				else:
-					var is_outer_edge := (
-						not _is_root_cell(cell + Vector2i(0, -1))
-						or not _is_root_cell(cell + Vector2i(0, 1))
-						or not _is_root_cell(cell + Vector2i(-1, 0))
-						or not _is_root_cell(cell + Vector2i(1, 0))
-					)
-					if is_outer_edge:
-						root_col = ROOT_EDGE_DARK
-
-				draw_rect(tile_rect, root_col)
-
-				# 2. Bevel lines for root tile (just like before)
-				draw_line(Vector2(x, y), Vector2(x + TILE_SIZE, y), highlight_edge_color, 1.0)
-				draw_line(Vector2(x, y), Vector2(x, y + TILE_SIZE), highlight_edge_color, 1.0)
-				draw_line(Vector2(x, y + TILE_SIZE), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
-				draw_line(Vector2(x + TILE_SIZE, y), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
-
-				# 3. Water flowing animation pulse along connected root path
-				if _is_connected_to_water and _water_flow_cells.has(cell):
-					var dist: int = _water_flow_cells[cell]
-					var wave: float = fmod(_water_pulse_time * 10.0 - float(dist), 10.0)
-					if wave >= 0.0 and wave < 5.0:
-						draw_rect(Rect2(x + 2.0, y + 2.0, 4.0, 4.0), ROOT_WATER_FLOW)
-						if wave < 1.6:
-							draw_rect(Rect2(x + 2.5, y + 2.5, 3.0, 3.0), Color.WHITE)
+				# Render retro pixel-art connective bitmask root tile
+				_draw_pixel_art_root(cell, Vector2(x, y), base_row_color)
 			else:
 				# 1. Base soil tile rendering
 				draw_rect(tile_rect, base_row_color)
 
-				# 2. Bevel lines for soil grid
-				draw_line(Vector2(x, y), Vector2(x + TILE_SIZE, y), highlight_edge_color, 1.0)
-				draw_line(Vector2(x, y), Vector2(x, y + TILE_SIZE), highlight_edge_color, 1.0)
-				draw_line(Vector2(x, y + TILE_SIZE), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
-				draw_line(Vector2(x + TILE_SIZE, y), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
 
 			# 3. Water overlay with top-to-bottom pixel fade/shrink
 			if _water_bank_lookup.has(cell):
@@ -1906,11 +1900,9 @@ func _draw_soil_grid(size: Vector2, mid: float) -> void:
 					if h > 0.001:
 						var water_subrect := Rect2(Vector2(x, y + offset_y), Vector2(TILE_SIZE, h))
 						draw_rect(water_subrect, fill_col)
-						draw_rect(water_subrect, edge_col, false, 0.75)
 				else:
 					# Untouched water layers below
 					draw_rect(tile_rect, fill_col)
-					draw_rect(tile_rect, edge_col, false, 0.75)
 
 	# 4. Rocks rendered on the soil grid at 1/3x scale (clipped to visible soil rows)
 	if _rocks_texture:
@@ -1960,8 +1952,115 @@ func _is_root_cell(c: Vector2i) -> bool:
 		var size := get_viewport_rect().size
 		var cols := int(ceil(size.x / TILE_SIZE))
 		var center_col := int(cols * 0.5)
-		return c.x >= center_col - 2 and c.x <= center_col + 1
+		var span := _get_trunk_base_span(center_col)
+		return c.x >= span.x and c.x <= span.y
 	return _initial_root_tiles.has(c) or _root_tiles.has(c)
+
+
+func _draw_pixel_art_root(cell: Vector2i, pos: Vector2, soil_col: Color) -> void:
+	var u: bool = _is_root_cell(cell + Vector2i(0, -1))
+	var d: bool = _is_root_cell(cell + Vector2i(0, 1))
+	var l: bool = _is_root_cell(cell + Vector2i(-1, 0))
+	var r: bool = _is_root_cell(cell + Vector2i(1, 0))
+
+	var ul: bool = _is_root_cell(cell + Vector2i(-1, -1))
+	var ur: bool = _is_root_cell(cell + Vector2i(1, -1))
+	var dl: bool = _is_root_cell(cell + Vector2i(-1, 1))
+	var dr: bool = _is_root_cell(cell + Vector2i(1, 1))
+
+	var px: float = pos.x
+	var py: float = pos.y
+
+	# 1. Base wood core fill (8x8)
+	draw_rect(Rect2(px, py, TILE_SIZE, TILE_SIZE), ROOT_WOOD_CORE)
+
+	# 2. Natural wood grain fiber & subtle light texture
+	if (u or d) and not (l and r):
+		# Vertical flow dominant: highlight on left, darker fiber on right
+		draw_rect(Rect2(px + 2.0, py, 1.0, 8.0), ROOT_WOOD_LIGHT)
+		draw_rect(Rect2(px + 5.0, py, 1.0, 8.0), ROOT_WOOD_GRAIN)
+	elif (l or r) and not (u and d):
+		# Horizontal flow dominant: highlight on top, darker fiber on bottom
+		draw_rect(Rect2(px, py + 2.0, 8.0, 1.0), ROOT_WOOD_LIGHT)
+		draw_rect(Rect2(px, py + 5.0, 8.0, 1.0), ROOT_WOOD_GRAIN)
+	else:
+		# Cross / center junction: gentle organic knot pattern
+		var knot_hash := posmod(cell.x * 37 + cell.y * 19, 7)
+		if knot_hash == 0 or knot_hash == 3:
+			draw_rect(Rect2(px + 3.0, py + 3.0, 2.0, 2.0), ROOT_WOOD_GRAIN)
+			draw_rect(Rect2(px + 2.0, py + 2.0, 1.0, 1.0), ROOT_WOOD_LIGHT)
+
+	# 3. Outer dark bark boundaries with directional light & shadow (Matching tree trunk)
+	# Top edge (light from top-left): 1px dark bark + 1px light highlight
+	if not u:
+		draw_rect(Rect2(px, py, 8.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px, py + 1.0, 8.0, 1.0), ROOT_WOOD_LIGHT)
+	# Left edge (sunlit side): 1px dark bark + 1px light highlight
+	if not l:
+		draw_rect(Rect2(px, py, 1.0, 8.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py, 1.0, 8.0), ROOT_WOOD_LIGHT)
+	# Bottom edge (shaded side): 1px dark bark + 1px shadow bevel
+	if not d:
+		draw_rect(Rect2(px, py + 7.0, 8.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px, py + 6.0, 8.0, 1.0), ROOT_BARK_SHADOW)
+	# Right edge (shaded side): 1px dark bark + 1px shadow bevel
+	if not r:
+		draw_rect(Rect2(px + 7.0, py, 1.0, 8.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py, 1.0, 8.0), ROOT_BARK_SHADOW)
+
+	# 4. Convex Outer Corners (Pixel Art Corner Rounding into soil)
+	if not u and not l:
+		draw_rect(Rect2(px, py, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 1.0, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px, py + 1.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 1.0, 1.0, 1.0), ROOT_WOOD_LIGHT)
+	if not u and not r:
+		draw_rect(Rect2(px + 7.0, py, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 6.0, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 7.0, py + 1.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 1.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if not d and not l:
+		draw_rect(Rect2(px, py + 7.0, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 1.0, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px, py + 6.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 6.0, 1.0, 1.0), ROOT_WOOD_LIGHT)
+	if not d and not r:
+		draw_rect(Rect2(px + 7.0, py + 7.0, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 6.0, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 7.0, py + 6.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 6.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+
+	# 5. Concave Inner Corners (Elbow Branch Notches)
+	if u and l and not ul:
+		draw_rect(Rect2(px, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 1.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if u and r and not ur:
+		draw_rect(Rect2(px + 7.0, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 1.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if d and l and not dl:
+		draw_rect(Rect2(px, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 6.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if d and r and not dr:
+		draw_rect(Rect2(px + 7.0, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 6.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+
+	# 6. Terminal Tip / Active Growth Point
+	var neighbor_count: int = (1 if u else 0) + (1 if d else 0) + (1 if l else 0) + (1 if r else 0)
+	var depth: int = _root_tiles.get(cell, 0)
+	if neighbor_count <= 1 and depth > 0:
+		draw_rect(Rect2(px + 3.0, py + 3.0, 2.0, 2.0), ROOT_TIP_COLOR)
+
+	# 7. Animated Water Absorption Pulse (Aşağıdan yukarıya, 5 piksel akış + yarım saniye duraksama)
+	if _is_connected_to_water and _water_flow_cells.has(cell):
+		var dist: int = _water_flow_cells[cell]
+		# 10 hücrelik döngü (hız=10): 5 hücrelik su akışı (0.5 sn) ardından 5 hücrelik duraksama (0.5 sn)
+		var wave: float = fmod(_water_pulse_time * 10.0 - float(dist), 10.0)
+		if wave >= 0.0 and wave < 5.0:
+			# 5 piksel boyunca ilerleyen mavi su akışı
+			draw_rect(Rect2(px + 2.0, py + 2.0, 4.0, 4.0), ROOT_WATER_FLOW)
+			# Dalganın öncü parlak su damlası
+			if wave < 1.6:
+				draw_rect(Rect2(px + 2.5, py + 2.5, 3.0, 3.0), Color.WHITE)
 
 
 func _update_water_flow_path() -> void:
@@ -1978,7 +2077,8 @@ func _update_water_flow_path() -> void:
 	var parent_map: Dictionary = {}
 	var dist_to_trunk: Dictionary = {}
 
-	for cx in range(center_col - 2, center_col + 2):
+	var trunk_span := _get_trunk_base_span(center_col)
+	for cx in range(trunk_span.x, trunk_span.y + 1):
 		var root_base := Vector2i(cx, 0)
 		if _initial_root_tiles.has(root_base) or _root_tiles.has(root_base):
 			queue.append(root_base)
