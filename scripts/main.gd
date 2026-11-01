@@ -121,6 +121,21 @@ var _vt323_font: Font = null
 var _root_grow_player: AudioStreamPlayer = null
 const ROOT_SFX_HOLD_TIME := 0.14
 var _root_sfx_timer: float = 0.0
+
+# Game state machine & Intro cinematic configuration
+enum GameState {
+	INTRO_PEACEFUL,
+	INTRO_FIRE,
+	INTRO_AFTERMATH,
+	INTRO_READY,
+	PLAYING
+}
+var _game_state: GameState = GameState.INTRO_PEACEFUL
+var _intro_timer: float = 0.0
+var _intro_fire_particles: Array = []
+var _intro_smoke_particles: Array = []
+var _intro_ash_particles: Array = []
+
 var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
 var _tree_health: float = 25.0 # Starts at initial stage (small tree)
 var _air_pollution: float = 35.0
@@ -187,6 +202,10 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if _game_state != GameState.PLAYING:
+		_process_intro(delta)
+		return
+
 	if _is_game_over:
 		if _root_grow_player and _root_grow_player.playing:
 			_root_grow_player.stop()
@@ -317,6 +336,7 @@ func _get_grow_button_rect(size: Vector2, mid: float) -> Rect2:
 
 
 func _restart_game() -> void:
+	_game_state = GameState.PLAYING
 	_water_stored = INITIAL_WATER
 	_tree_health = 25.0
 	_air_pollution = 35.0
@@ -524,6 +544,24 @@ func _clamp_scroll() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _game_state != GameState.PLAYING:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
+				_start_gameplay()
+				return
+			elif event.keycode == KEY_ESCAPE:
+				var mode := DisplayServer.window_get_mode()
+				if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
+					DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+				else:
+					DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+				return
+		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			if _game_state == GameState.INTRO_READY:
+				_start_gameplay()
+				return
+		return
+
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
 	var grow_btn_rect := _get_grow_button_rect(size, mid)
@@ -945,9 +983,501 @@ func _generate_rocks(cols: int, rows: int) -> void:
 					_rock_cells[Vector2i(origin_x + cell_c, origin_y + cell_r)] = true
 
 
+func _process_intro(delta: float) -> void:
+	_intro_timer += delta
+	if _intro_timer < 5.0:
+		_game_state = GameState.INTRO_PEACEFUL
+	elif _intro_timer < 11.0:
+		_game_state = GameState.INTRO_FIRE
+	elif _intro_timer < 15.0:
+		_game_state = GameState.INTRO_AFTERMATH
+	else:
+		_game_state = GameState.INTRO_READY
+
+	var size := get_viewport_rect().size
+	var mid := size.y * 0.5
+	_update_intro_particles(delta, size, mid)
+	_update_wind(delta)
+	queue_redraw()
+
+
+func _start_gameplay() -> void:
+	_game_state = GameState.PLAYING
+	_intro_fire_particles.clear()
+	_intro_smoke_particles.clear()
+	_intro_ash_particles.clear()
+	queue_redraw()
+
+
+func _update_intro_particles(delta: float, size: Vector2, mid: float) -> void:
+	var bbq_x := size.x * 0.58 + 10.0
+	var spark_land_x := size.x * 0.58 + 28.0
+
+	# 1. Peaceful smoke puffs from grill (0.0s - 5.0s)
+	if _intro_timer < 5.0:
+		if _wind_rng.randf() < delta * 4.5:
+			_intro_smoke_particles.append({
+				"pos": Vector2(bbq_x + _wind_rng.randf_range(-3.0, 3.0), mid - 20.0),
+				"vel": Vector2(_wind_rng.randf_range(-6.0, 10.0), _wind_rng.randf_range(-22.0, -38.0)),
+				"radius": _wind_rng.randf_range(3.0, 5.0),
+				"max_radius": _wind_rng.randf_range(10.0, 18.0),
+				"color": Color(0.92, 0.94, 0.96, 0.45),
+				"age": 0.0,
+				"max_age": _wind_rng.randf_range(2.0, 3.2)
+			})
+
+	# 2. Fire and dark billowing smoke (5.8s - 11.5s)
+	if _intro_timer >= 5.8 and _intro_timer < 11.5:
+		var left_t := clampf((_intro_timer - 5.8) / 3.8, 0.0, 1.0)
+		var fire_left := lerpf(spark_land_x, size.x * 0.06, left_t)
+		var right_t := clampf((_intro_timer - 5.8) / 2.8, 0.0, 1.0)
+		var fire_right := lerpf(spark_land_x, size.x * 0.94, right_t)
+
+		var fire_intensity := 1.0
+		if _intro_timer > 10.0:
+			fire_intensity = clampf((11.5 - _intro_timer) / 1.5, 0.0, 1.0)
+
+		# Ground fire sparks/particles
+		var spawn_count := int(fire_intensity * 7.0)
+		for k in spawn_count:
+			var fx := _wind_rng.randf_range(fire_left, fire_right)
+			if absf(fx - size.x * 0.5) < 14.0:
+				continue
+			var col_choice := _wind_rng.randf()
+			var p_col: Color
+			if col_choice < 0.35:
+				p_col = Color("fff59d")
+			elif col_choice < 0.7:
+				p_col = Color("ff9800")
+			else:
+				p_col = Color("f44336")
+
+			_intro_fire_particles.append({
+				"pos": Vector2(fx, mid - _wind_rng.randf_range(0.0, 10.0)),
+				"vel": Vector2(_wind_rng.randf_range(-15.0, 15.0) + _wind_direction * 10.0, _wind_rng.randf_range(-45.0, -110.0)),
+				"size": _wind_rng.randf_range(3.0, 7.0),
+				"color": p_col,
+				"age": 0.0,
+				"max_age": _wind_rng.randf_range(0.25, 0.55)
+			})
+
+		# Dark billowing smoke
+		for k in 3:
+			var sx := _wind_rng.randf_range(fire_left, fire_right)
+			_intro_smoke_particles.append({
+				"pos": Vector2(sx, mid - _wind_rng.randf_range(5.0, 18.0)),
+				"vel": Vector2(_wind_rng.randf_range(10.0, 35.0) * _wind_direction, _wind_rng.randf_range(-35.0, -75.0)),
+				"radius": _wind_rng.randf_range(6.0, 12.0),
+				"max_radius": _wind_rng.randf_range(28.0, 52.0),
+				"color": Color(_wind_rng.randf_range(0.12, 0.22), _wind_rng.randf_range(0.10, 0.16), _wind_rng.randf_range(0.08, 0.14), 0.55 * fire_intensity),
+				"age": 0.0,
+				"max_age": _wind_rng.randf_range(2.5, 4.2)
+			})
+
+	# 3. Ash flakes drifting in the aftermath (10.5s+)
+	if _intro_timer >= 10.5:
+		if _wind_rng.randf() < 0.45:
+			_intro_ash_particles.append({
+				"pos": Vector2(_wind_rng.randf_range(-20.0, size.x + 20.0), -10.0),
+				"vel": Vector2(_wind_rng.randf_range(-12.0, 12.0), _wind_rng.randf_range(22.0, 48.0)),
+				"size": _wind_rng.randf_range(1.5, 3.5),
+				"alpha": _wind_rng.randf_range(0.35, 0.75),
+				"phase": _wind_rng.randf_range(0.0, TAU),
+				"age": 0.0,
+				"max_age": _wind_rng.randf_range(8.0, 15.0)
+			})
+
+		var stump_xs := [size.x * 0.14, size.x * 0.28, size.x * 0.72, size.x * 0.86]
+		for sx in stump_xs:
+			if _wind_rng.randf() < delta * 1.8:
+				_intro_smoke_particles.append({
+					"pos": Vector2(sx + _wind_rng.randf_range(-4.0, 4.0), mid - 14.0),
+					"vel": Vector2(_wind_rng.randf_range(-6.0, 10.0), _wind_rng.randf_range(-18.0, -32.0)),
+					"radius": _wind_rng.randf_range(3.0, 5.0),
+					"max_radius": _wind_rng.randf_range(10.0, 16.0),
+					"color": Color(0.65, 0.65, 0.65, 0.35),
+					"age": 0.0,
+					"max_age": _wind_rng.randf_range(1.8, 2.8)
+				})
+
+	# Update smoke particles
+	for i in range(_intro_smoke_particles.size() - 1, -1, -1):
+		var p: Dictionary = _intro_smoke_particles[i]
+		p["age"] += delta
+		if p["age"] >= p["max_age"]:
+			_intro_smoke_particles.remove_at(i)
+		else:
+			p["pos"] += p["vel"] * delta
+
+	# Update fire particles
+	for i in range(_intro_fire_particles.size() - 1, -1, -1):
+		var p: Dictionary = _intro_fire_particles[i]
+		p["age"] += delta
+		if p["age"] >= p["max_age"]:
+			_intro_fire_particles.remove_at(i)
+		else:
+			p["pos"] += p["vel"] * delta
+
+	# Update ash particles
+	for i in range(_intro_ash_particles.size() - 1, -1, -1):
+		var p: Dictionary = _intro_ash_particles[i]
+		p["age"] += delta
+		if p["age"] >= p["max_age"] or p["pos"].y > size.y + 10.0:
+			_intro_ash_particles.remove_at(i)
+		else:
+			p["pos"].x += (p["vel"].x + sin(p["age"] * 2.2 + p["phase"]) * 14.0) * delta
+			p["pos"].y += p["vel"].y * delta
+
+
+func _draw_tree_standalone(pos: Vector2, leaf_rect: Rect2, trunk_rect: Rect2, leaf_offset_px: float = 0.0, sway_mult: float = 1.0, color_mod: Color = Color.WHITE, burn_progress: float = 0.0) -> void:
+	if not _tree_texture:
+		var col := color_mod if burn_progress <= 0.0 else color_mod.lerp(Color("22110a"), burn_progress)
+		draw_rect(Rect2(pos - Vector2(8.0, 40.0), Vector2(16.0, 40.0)), col)
+		return
+
+	var tree_pixel_scale := TILE_SIZE
+	var scaled_size := Vector2(SPRITE_SIZE, SPRITE_SIZE) * tree_pixel_scale
+	var dest_pos := Vector2(pos.x - 19.0 * tree_pixel_scale, pos.y - 37.0 * tree_pixel_scale)
+
+	var sway_px := (sin(_wind_time * WIND_SWAY_FREQ + pos.x * 0.015) * WIND_MAX_SWAY_PX + _wind_direction * 0.6) * _wind_strength * sway_mult
+	var base_oscillation_x := sway_px * tree_pixel_scale
+	var leaf_offset_x := base_oscillation_x * 0.75
+
+	if burn_progress >= 1.0:
+		# Fully burnt tree: only lower charred trunk stump (rows 31..36)
+		var burnt_trunk_col := Color("140905")
+		for row_y in range(31, SPRITE_SIZE):
+			var dst_row_rect := Rect2(
+				dest_pos.x,
+				dest_pos.y + float(row_y) * tree_pixel_scale,
+				scaled_size.x,
+				tree_pixel_scale
+			)
+			var src_row := Rect2(trunk_rect.position.x, trunk_rect.position.y + row_y, SPRITE_SIZE, 1.0)
+			draw_texture_rect_region(_tree_texture, dst_row_rect, src_row, burnt_trunk_col)
+		return
+
+	var trunk_col := color_mod
+	if burn_progress > 0.0:
+		trunk_col = color_mod.lerp(Color("160a06"), burn_progress)
+
+	for row_y in SPRITE_SIZE:
+		var height_t := clampf((36.0 - float(row_y)) / 32.0, 0.0, 1.0)
+		var trunk_row_offset_x := base_oscillation_x * 0.5 * (height_t * height_t)
+		var dst_row_rect := Rect2(
+			dest_pos.x + trunk_row_offset_x,
+			dest_pos.y + float(row_y) * tree_pixel_scale,
+			scaled_size.x,
+			tree_pixel_scale
+		)
+		var src_row := Rect2(trunk_rect.position.x, trunk_rect.position.y + row_y, SPRITE_SIZE, 1.0)
+		draw_texture_rect_region(_tree_texture, dst_row_rect, src_row, trunk_col)
+
+	# Leaves
+	if burn_progress < 1.0:
+		var leaf_alpha := 1.0
+		var leaf_tint := color_mod
+		if burn_progress > 0.0:
+			leaf_alpha = clampf((1.0 - burn_progress) * 1.25, 0.0, 1.0)
+			leaf_tint = color_mod.lerp(Color("ff4500"), burn_progress)
+		leaf_tint.a *= leaf_alpha
+		if leaf_tint.a > 0.01:
+			var leaf_dest := Rect2(dest_pos + Vector2(leaf_offset_x, -leaf_offset_px * tree_pixel_scale), scaled_size)
+			draw_texture_rect_region(_tree_texture, leaf_dest, leaf_rect, leaf_tint)
+
+
+func _draw_intro_picnic(pos: Vector2, burn_progress: float) -> void:
+	var bbq_x := pos.x + 10.0
+	var bbq_base_y := pos.y
+
+	# Ground shadow
+	draw_line(Vector2(bbq_x - 8.0, bbq_base_y), Vector2(bbq_x + 8.0, bbq_base_y), Color(0.0, 0.0, 0.0, 0.35), 2.0)
+	# Grill legs
+	var leg_col := Color("141414")
+	draw_line(Vector2(bbq_x - 7.0, bbq_base_y), Vector2(bbq_x - 3.0, bbq_base_y - 12.0), leg_col, 2.0)
+	draw_line(Vector2(bbq_x + 7.0, bbq_base_y), Vector2(bbq_x + 3.0, bbq_base_y - 12.0), leg_col, 2.0)
+	draw_line(Vector2(bbq_x, bbq_base_y), Vector2(bbq_x, bbq_base_y - 12.0), leg_col, 2.0)
+
+	# Kettle bowl
+	var bowl_rect := Rect2(bbq_x - 8.0, bbq_base_y - 20.0, 16.0, 10.0)
+	draw_rect(bowl_rect, Color("222222"))
+	draw_rect(Rect2(bbq_x - 9.0, bbq_base_y - 21.0, 18.0, 3.0), Color("333333"))
+
+	# Glowing coals inside
+	var coal_glow := (sin(_intro_timer * 6.0) + 1.0) * 0.5
+	var coal_col := Color("ff5722").lerp(Color("ffeb3b"), coal_glow * 0.6)
+	draw_rect(Rect2(bbq_x - 6.0, bbq_base_y - 19.0, 12.0, 4.0), coal_col)
+
+	# Spark flying out from grill (5.0s to 5.8s)
+	if _intro_timer >= 5.0 and _intro_timer < 5.8:
+		var spark_t := (_intro_timer - 5.0) / 0.8
+		var target_x := pos.x + 28.0
+		var sx := lerpf(bbq_x, target_x, spark_t)
+		var sy := lerpf(bbq_base_y - 19.0, bbq_base_y, spark_t) - sin(spark_t * PI) * 26.0
+		draw_rect(Rect2(Vector2(sx - 2.0, sy - 2.0), Vector2(4.0, 4.0)), Color("fff59d"))
+		draw_rect(Rect2(Vector2(sx - 1.0, sy - 1.0), Vector2(2.0, 2.0)), Color.WHITE)
+
+	# Picnic Blanket & Basket at pos + Vector2(24.0, 0.0)
+	var blk_x := pos.x + 24.0
+	var blk_w := 48.0
+	var blk_h := 10.0
+
+	if burn_progress < 1.0:
+		var blk_mod := Color.WHITE.lerp(Color("1a100a"), burn_progress)
+		var tile_w := 8.0
+		var tile_h := 5.0
+		for row in 2:
+			for col in 6:
+				var is_red := (col + row) % 2 == 0
+				var t_col := Color("d32f2f") if is_red else Color("f5f5f5")
+				t_col = t_col * blk_mod
+				draw_rect(Rect2(blk_x + float(col) * tile_w, bbq_base_y - 4.0 + float(row) * tile_h, tile_w, tile_h), t_col)
+
+		# Picnic Basket
+		var basket_col := Color("8d5524").lerp(Color("160b06"), burn_progress)
+		var basket_rect := Rect2(blk_x + 8.0, bbq_base_y - 16.0, 14.0, 12.0)
+		draw_rect(basket_rect, basket_col)
+		draw_line(Vector2(basket_rect.position.x, basket_rect.position.y), Vector2(basket_rect.position.x + basket_rect.size.x, basket_rect.position.y), Color("a06530") * blk_mod, 1.0)
+		# Basket cloth
+		draw_rect(Rect2(blk_x + 12.0, bbq_base_y - 16.0, 6.0, 5.0), Color.WHITE * blk_mod)
+		# Small fruit on blanket
+		draw_rect(Rect2(blk_x + 32.0, bbq_base_y - 7.0, 4.0, 4.0), Color("e53935") * blk_mod)
+	else:
+		# Burnt ash smudge
+		draw_rect(Rect2(blk_x, bbq_base_y - 2.0, blk_w, 4.0), Color("170f0a"))
+
+
+func _draw_intro_smoke_particles() -> void:
+	for p in _intro_smoke_particles:
+		var progress: float = p["age"] / p["max_age"]
+		var r: float = lerpf(p["radius"], p["max_radius"], progress)
+		var col: Color = p["color"]
+		col.a *= (1.0 - progress)
+		draw_circle(p["pos"], r, col)
+
+
+func _draw_intro_fire_particles() -> void:
+	for p in _intro_fire_particles:
+		var progress: float = p["age"] / p["max_age"]
+		var s: float = lerpf(p["size"], 1.5, progress)
+		var col: Color = p["color"]
+		col.a *= (1.0 - progress)
+		draw_rect(Rect2(p["pos"].x - s * 0.5, p["pos"].y - s * 0.5, s, s), col)
+
+
+func _draw_intro_ash_particles() -> void:
+	for p in _intro_ash_particles:
+		var progress: float = p["age"] / p["max_age"]
+		var s: float = p["size"]
+		var a: float = p["alpha"] * (1.0 - progress * 0.6)
+		draw_rect(Rect2(p["pos"].x, p["pos"].y, s, s), Color(0.88, 0.88, 0.90, a))
+
+
+func _draw_intro_narrative(size: Vector2) -> void:
+	if not _vt323_font:
+		return
+
+	var text := ""
+	var alpha := 0.0
+	var is_final := false
+	var subtext := ""
+
+	if _intro_timer < 5.0:
+		text = "A peaceful forest, full of beautiful life..."
+		if _intro_timer < 0.8:
+			alpha = _intro_timer / 0.8
+		elif _intro_timer > 4.4:
+			alpha = clampf((5.0 - _intro_timer) / 0.6, 0.0, 1.0)
+		else:
+			alpha = 1.0
+	elif _intro_timer < 11.0:
+		text = "A single careless spark... turned forest to ashes."
+		if _intro_timer < 5.8:
+			alpha = (_intro_timer - 5.0) / 0.8
+		elif _intro_timer > 10.4:
+			alpha = clampf((11.0 - _intro_timer) / 0.6, 0.0, 1.0)
+		else:
+			alpha = 1.0
+	else:
+		text = "The fate of the forest is now in your hands."
+		alpha = clampf((_intro_timer - 11.0) / 0.8, 0.0, 1.0)
+		is_final = true
+		if _intro_timer >= 15.0:
+			subtext = "[ PRESS SPACE TO BEGIN ]"
+
+	if alpha > 0.01 and text != "":
+		# Letterbox banner at top
+		var bar_rect := Rect2(0.0, 36.0, size.x, 68.0)
+		draw_rect(bar_rect, Color(0.04, 0.04, 0.06, 0.72 * alpha))
+		draw_line(Vector2(0.0, 36.0), Vector2(size.x, 36.0), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
+		draw_line(Vector2(0.0, 104.0), Vector2(size.x, 104.0), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
+
+		var text_color := Color.WHITE if not is_final else Color("ffd54f")
+		text_color.a *= alpha
+		# Crisp drop shadow
+		draw_string(_vt323_font, Vector2(2.0, 81.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, Color(0.0, 0.0, 0.0, 0.85 * alpha))
+		draw_string(_vt323_font, Vector2(0.0, 79.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, text_color)
+
+	if subtext != "":
+		# Pulsing call to action box at center bottom
+		var pulse := (sin(_intro_timer * 4.8) + 1.0) * 0.5
+		var sub_color := Color("ffd54f").lerp(Color.WHITE, pulse)
+		var box_w := 360.0
+		var box_h := 46.0
+		var box_pos := Vector2((size.x - box_w) * 0.5, size.y * 0.74)
+		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.0, 0.0, 0.0, 0.75))
+		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), sub_color, false, 2.0)
+		draw_string(_vt323_font, Vector2(box_pos.x, box_pos.y + 32.0), subtext, HORIZONTAL_ALIGNMENT_CENTER, box_w, 32, sub_color)
+
+	# Skip prompt in bottom right
+	if _game_state != GameState.PLAYING and _game_state != GameState.INTRO_READY:
+		draw_string(_vt323_font, Vector2(size.x - 170.0, size.y - 24.0), "[ SPACE ] SKIP", HORIZONTAL_ALIGNMENT_RIGHT, 150.0, 22, Color(1.0, 1.0, 1.0, 0.65))
+
+
+func _draw_intro(size: Vector2, mid: float) -> void:
+	# 1. Sky background
+	var cur_sky_top: Color = SKY_TOP
+	var cur_sky_horiz: Color = SKY_HORIZON
+	var cur_sun_col: Color = SUN
+	var sun_alpha: float = 1.0
+
+	if _intro_timer < 5.0:
+		cur_sky_top = SKY_TOP
+		cur_sky_horiz = SKY_HORIZON
+		cur_sun_col = SUN
+		sun_alpha = 1.0
+	elif _intro_timer < 11.0:
+		var fire_t := clampf((_intro_timer - 5.0) / 4.5, 0.0, 1.0)
+		cur_sky_top = SKY_TOP.lerp(Color("160805"), fire_t)
+		cur_sky_horiz = SKY_HORIZON.lerp(Color("9e320f"), fire_t)
+		cur_sun_col = SUN.lerp(Color("d84315"), fire_t)
+		sun_alpha = lerpf(1.0, 0.25, fire_t)
+	else:
+		var after_t := clampf((_intro_timer - 11.0) / 3.0, 0.0, 1.0)
+		cur_sky_top = Color("160805").lerp(Color("1b2028"), after_t)
+		cur_sky_horiz = Color("9e320f").lerp(Color("4f4347"), after_t)
+		sun_alpha = 0.0
+
+	draw_polygon(
+		PackedVector2Array([Vector2.ZERO, Vector2(size.x, 0), Vector2(size.x, mid), Vector2(0, mid)]),
+		PackedColorArray([cur_sky_top, cur_sky_top, cur_sky_horiz, cur_sky_horiz])
+	)
+
+	# Sun
+	if sun_alpha > 0.02:
+		var sun_pos := Vector2(size.x * 0.82, mid * 0.25)
+		var r := mid * 0.1
+		var c := cur_sun_col
+		c.a *= sun_alpha
+		draw_circle(sun_pos, r, c)
+		var c_ring := cur_sun_col
+		c_ring.a *= 0.2 * sun_alpha
+		draw_circle(sun_pos, r * 1.35, c_ring)
+
+	# 2. Rolling hills
+	var far_col := HILL_FAR
+	var near_col := HILL_NEAR
+	if _intro_timer >= 5.0 and _intro_timer < 11.0:
+		var ht := clampf((_intro_timer - 5.0) / 4.5, 0.0, 1.0)
+		far_col = HILL_FAR.lerp(Color("3d2016"), ht)
+		near_col = HILL_NEAR.lerp(Color("2a170f"), ht)
+	elif _intro_timer >= 11.0:
+		var ht := clampf((_intro_timer - 11.0) / 3.0, 0.0, 1.0)
+		far_col = Color("3d2016").lerp(Color("23272e"), ht)
+		near_col = Color("2a170f").lerp(Color("1b1e24"), ht)
+
+	_draw_wave(size.x, mid, mid * 0.72, mid * 0.08, 1.3, 0.0, far_col)
+	_draw_wave(size.x, mid, mid * 0.82, mid * 0.06, 2.1, 1.7, near_col)
+
+	# 3. Ground meadow (grassline at mid)
+	var grass_col := GRASS
+	if _intro_timer >= 5.8 and _intro_timer < 11.0:
+		var gt := clampf((_intro_timer - 5.8) / 3.5, 0.0, 1.0)
+		grass_col = GRASS.lerp(Color("22150e"), gt)
+	elif _intro_timer >= 11.0:
+		grass_col = Color("1e140d")
+
+	draw_rect(Rect2(0, mid * 0.94, size.x, mid * 0.06), grass_col)
+
+	# Below mid: Soil / Underground
+	if _intro_timer < 11.0:
+		draw_rect(Rect2(0, mid, size.x, size.y - mid), Color("22140b"))
+	else:
+		_draw_soil_grid(size, mid)
+		var soil_cover_alpha := clampf(1.0 - (_intro_timer - 11.0) / 2.0, 0.0, 1.0)
+		if soil_cover_alpha > 0.0:
+			draw_rect(Rect2(0, mid, size.x, size.y - mid), Color(0.13, 0.08, 0.04, soil_cover_alpha))
+
+	# 4. Smoke & particles behind/around trees
+	_draw_intro_smoke_particles()
+
+	# 5. Picnic Area & Barbecue
+	var picnic_pos := Vector2(size.x * 0.58, mid)
+	var picnic_burn := 0.0
+	if _intro_timer >= 5.8:
+		picnic_burn = clampf((_intro_timer - 5.8) / 1.8, 0.0, 1.0)
+	_draw_intro_picnic(picnic_pos, picnic_burn)
+
+	# 6. Trees
+	var burn_t3 := clampf((_intro_timer - 6.2) / 2.0, 0.0, 1.0) if _intro_timer >= 6.2 else 0.0
+	var burn_t4 := clampf((_intro_timer - 7.2) / 2.0, 0.0, 1.0) if _intro_timer >= 7.2 else 0.0
+	var burn_t1 := clampf((_intro_timer - 8.0) / 2.0, 0.0, 1.0) if _intro_timer >= 8.0 else 0.0
+	var burn_t0 := clampf((_intro_timer - 9.0) / 2.0, 0.0, 1.0) if _intro_timer >= 9.0 else 0.0
+
+	# Tree 0 (Left Far)
+	_draw_tree_standalone(Vector2(size.x * 0.14, mid), SPRITE_RECT_MIDLEAVES, SPRITE_RECT_SMALLROOT, 0.0, 0.85, Color.WHITE, burn_t0)
+	# Tree 1 (Left Near)
+	_draw_tree_standalone(Vector2(size.x * 0.28, mid), SPRITE_RECT_MIDLEAVES, SPRITE_RECT_SMALLROOT, 0.0, 1.1, Color.WHITE, burn_t1)
+	# Tree 3 (Right Near)
+	_draw_tree_standalone(Vector2(size.x * 0.72, mid), SPRITE_RECT_MIDLEAVES, SPRITE_RECT_SMALLROOT, 0.0, 1.05, Color.WHITE, burn_t3)
+	# Tree 4 (Right Far)
+	_draw_tree_standalone(Vector2(size.x * 0.86, mid), SPRITE_RECT_MIDLEAVES, SPRITE_RECT_SMALLROOT, 0.0, 0.9, Color.WHITE, burn_t4)
+
+	# Center Protagonist Tree (NEVER burns!)
+	_draw_tree_standalone(Vector2(size.x * 0.50, mid), SPRITE_RECT_SMALLLEAVES, SPRITE_RECT_SMALLROOT, 0.0, 1.0, Color.WHITE, 0.0)
+
+	# 7. Flames & Fire Line on the grass
+	if _intro_timer >= 5.8 and _intro_timer < 11.5:
+		var spark_land_x := size.x * 0.58 + 28.0
+		var left_t := clampf((_intro_timer - 5.8) / 3.8, 0.0, 1.0)
+		var fire_left := lerpf(spark_land_x, size.x * 0.06, left_t)
+		var right_t := clampf((_intro_timer - 5.8) / 2.8, 0.0, 1.0)
+		var fire_right := lerpf(spark_land_x, size.x * 0.94, right_t)
+
+		var fire_alpha := 1.0
+		if _intro_timer > 10.0:
+			fire_alpha = clampf((11.5 - _intro_timer) / 1.5, 0.0, 1.0)
+
+		var step_x := 8.0
+		var num_steps := int((fire_right - fire_left) / step_x)
+		for s in num_steps:
+			var fx := fire_left + float(s) * step_x
+			if absf(fx - size.x * 0.5) < 16.0:
+				continue
+			var jitter := sin(fx * 0.35 + _intro_timer * 16.0) * 0.5 + 0.5
+			var flame_h := jitter * 14.0 + 4.0
+			var col_outer := Color("f44336")
+			col_outer.a *= fire_alpha
+			var col_inner := Color("ffeb3b")
+			col_inner.a *= fire_alpha
+			draw_rect(Rect2(fx, mid - flame_h, step_x, flame_h), col_outer)
+			draw_rect(Rect2(fx + 2.0, mid - flame_h * 0.65, step_x - 4.0, flame_h * 0.65), col_inner)
+
+	# 8. Draw Fire particles and Ash flakes on top
+	_draw_intro_fire_particles()
+	_draw_intro_ash_particles()
+
+	# 9. Narrative text and prompts
+	_draw_intro_narrative(size)
+
+
 func _draw() -> void:
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
+	if _game_state != GameState.PLAYING:
+		_draw_intro(size, mid)
+		return
+
 	_draw_sky(size, mid)
 	_draw_hills(size, mid)
 	_draw_wind_gusts(mid)
