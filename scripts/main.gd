@@ -124,6 +124,8 @@ const GAME_DURATION := 60.0
 var _game_timer: float = GAME_DURATION
 var _is_game_won: bool = false
 var _is_game_over: bool = false
+var _is_paused: bool = false
+var _pause_hovered_btn_idx: int = 0
 var _game_over_reason: String = ""
 var _is_grow_btn_hovered: bool = false
 var _is_connected_to_water: bool = false
@@ -219,6 +221,11 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if _is_paused:
+		if _root_grow_player and _root_grow_player.playing:
+			_root_grow_player.stop()
+		return
+
 	if _is_game_over:
 		if _root_grow_player and _root_grow_player.playing:
 			_root_grow_player.stop()
@@ -291,12 +298,17 @@ func _process(delta: float) -> void:
 		needs_redraw = true
 
 	# Tree health decreases only when the tree is oscillating during the wind state (or 2x faster during a heat wave or acid rain), and only increases via GROW TREE
+	# Difficulty multiplier: Easy = 1.0x, Medium = 1.125x, Hard = 1.25x
+	var diff_mult := 1.0
+	if GameSettings:
+		diff_mult = GameSettings.get_health_decay_multiplier()
+
 	var old_hp := _tree_health
 	var current_health_decay := 0.0
 	if _is_heatwave or _is_acid_rain:
-		current_health_decay = HEALTH_DECAY_RATE * 2.0
+		current_health_decay = HEALTH_DECAY_RATE * 2.0 * diff_mult
 	elif _is_tree_oscillating():
-		current_health_decay = HEALTH_DECAY_RATE
+		current_health_decay = HEALTH_DECAY_RATE * diff_mult
 	_tree_health = maxf(0.0, _tree_health - current_health_decay * delta)
 	if not is_equal_approx(old_hp, _tree_health):
 		needs_redraw = true
@@ -320,25 +332,29 @@ func _process(delta: float) -> void:
 	if int(ceilf(_game_timer)) != prev_second:
 		needs_redraw = true
 
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
 	# Check Win condition: timer hits 0:00
 	if _game_timer <= 0.0 and not _is_game_over:
 		_game_timer = 0.0
 		_is_game_over = true
 		_is_game_won = true
-		_game_over_reason = "You helped the Humans to breath fresh air"
+		_game_over_reason = "İnsanların temiz hava solumasına yardım ettin" if is_tr else "You helped the Humans to breath fresh air"
 		needs_redraw = true
 
 	# Check Game Over conditions: air pollution reaches max or water reaches 0
 	if _air_pollution >= MAX_AIR_POLLUTION:
 		_is_game_over = true
 		_is_game_won = false
-		_game_over_reason = "AIR POLLUTION REACHED 100%"
+		_game_over_reason = "HAVA KİRLİLİĞİ %100'E ULAŞTI" if is_tr else "AIR POLLUTION REACHED 100%"
 		needs_redraw = true
 	elif _water_stored <= 0.0:
 		_water_stored = 0.0
 		_is_game_over = true
 		_is_game_won = false
-		_game_over_reason = "WATER DEPLETED (0L)"
+		_game_over_reason = "SU TÜKENDİ (0L)" if is_tr else "WATER DEPLETED (0L)"
 		needs_redraw = true
 
 	if _update_tree_transitions(delta):
@@ -726,10 +742,78 @@ func _clamp_scroll() -> void:
 	_soil_scroll_y = clampf(_soil_scroll_y, 0.0, _max_scroll_y())
 
 
+func _get_pause_button_rects(size: Vector2, mid: float) -> Array[Rect2]:
+	var rects: Array[Rect2] = []
+	var btn_w := 260.0
+	var btn_h := 46.0
+	var lower_h := size.y - mid
+
+	# Match the vertical margin/gap used across main menu buttons (4 buttons on the lower screen: 5 gaps)
+	var main_menu_count := 4
+	var total_btn_h := float(main_menu_count) * btn_h
+	var margin_y := maxf(8.0, (lower_h - total_btn_h) / float(main_menu_count + 1))
+	var start_x := (size.x - btn_w) * 0.5
+
+	# Button 0 ("Continue") and Button 1 ("Main Menu") positioned with the exact main menu gap
+	var count := 2
+	for i in count:
+		var y := mid + margin_y + float(i) * (btn_h + margin_y)
+		rects.append(Rect2(Vector2(start_x, y), Vector2(btn_w, btn_h)))
+
+	return rects
+
+
+func _toggle_pause() -> void:
+	_is_paused = not _is_paused
+	_is_lmb_down = false
+	_has_last_drag_cell = false
+	_active_drag_Safe_tiles.clear()
+	_active_drag_history.clear()
+	_root_sfx_timer = 0.0
+	if _root_grow_player and _root_grow_player.playing:
+		_root_grow_player.stop()
+	_pause_hovered_btn_idx = 0
+	queue_redraw()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
 	var grow_btn_rect := _get_grow_button_rect(size, mid)
+
+	if _is_paused:
+		var pause_rects := _get_pause_button_rects(size, mid)
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_ESCAPE:
+				_toggle_pause()
+				return
+			elif event.keycode == KEY_UP or event.keycode == KEY_W:
+				_pause_hovered_btn_idx = (_pause_hovered_btn_idx - 1 + 2) % 2
+				queue_redraw()
+				return
+			elif event.keycode == KEY_DOWN or event.keycode == KEY_S:
+				_pause_hovered_btn_idx = (_pause_hovered_btn_idx + 1) % 2
+				queue_redraw()
+				return
+			elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER or event.keycode == KEY_SPACE:
+				_activate_pause_button(_pause_hovered_btn_idx)
+				return
+
+		elif event is InputEventMouseMotion:
+			for i in pause_rects.size():
+				if pause_rects[i].has_point(event.position):
+					if _pause_hovered_btn_idx != i:
+						_pause_hovered_btn_idx = i
+						queue_redraw()
+					break
+
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			for i in pause_rects.size():
+				if pause_rects[i].has_point(event.position):
+					_pause_hovered_btn_idx = i
+					_activate_pause_button(i)
+					return
+		return
 
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
@@ -792,11 +876,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_R:
 			_restart_game()
 		elif event.keycode == KEY_ESCAPE:
-			var mode := DisplayServer.window_get_mode()
-			if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
-				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-			else:
-				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+			if not _is_game_over:
+				_toggle_pause()
+
+
+func _activate_pause_button(idx: int) -> void:
+	if idx == 0:
+		# Continue
+		_toggle_pause()
+	elif idx == 1:
+		# Main Menu
+		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 
 func _get_neighbor_min_depth(cell: Vector2i) -> int:
@@ -1203,6 +1293,48 @@ func _draw() -> void:
 	_draw_grow_button(size, mid)
 	if _is_game_over:
 		_draw_game_over_overlay(size)
+	elif _is_paused:
+		_draw_pause_menu(size, mid)
+
+
+func _draw_pause_menu(size: Vector2, mid: float) -> void:
+	if not _vt323_font:
+		return
+
+	# Lower half dim overlay
+	draw_rect(Rect2(0.0, mid, size.x, size.y - mid), Color(0.0, 0.0, 0.0, 0.78))
+
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
+	var rects := _get_pause_button_rects(size, mid)
+	var labels := [
+		"Devam Et" if is_tr else "Continue",
+		"Ana Menü" if is_tr else "Main Menu"
+	]
+
+	for i in rects.size():
+		var r: Rect2 = rects[i]
+		var is_focused := (i == _pause_hovered_btn_idx)
+
+		# Drop shadow
+		draw_rect(Rect2(r.position + Vector2(2.0, 3.0), r.size), Color(0.0, 0.0, 0.0, 0.65))
+
+		# Background
+		var bg_col := Color(0.22, 0.28, 0.22, 0.95) if is_focused else Color(0.12, 0.12, 0.12, 0.88)
+		draw_rect(r, bg_col)
+
+		# Border: focused button gets a crisp white thick border
+		if is_focused:
+			draw_rect(r, Color.WHITE, false, 2.5)
+		else:
+			draw_rect(r, Color(1.0, 1.0, 1.0, 0.25), false, 1.0)
+
+		# Label
+		var text_col := Color("bfe3f5") if is_focused else Color.WHITE
+		var text_y := r.position.y + r.size.y * 0.5 + 8.0
+		draw_string(_vt323_font, Vector2(r.position.x, text_y), labels[i], HORIZONTAL_ALIGNMENT_CENTER, r.size.x, 26, text_col)
 
 
 func _draw_acid_rain(_size: Vector2, mid: float) -> void:
@@ -1264,8 +1396,13 @@ func _draw_health_bar(_size: Vector2) -> void:
 
 	var font_size := 22
 
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
 	# Title text above the bar
-	draw_string(_vt323_font, bar_pos + Vector2(0.0, -6.0), "TREE HEALTH", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	var tree_title := "AĞAÇ SAĞLIĞI" if is_tr else "TREE HEALTH"
+	draw_string(_vt323_font, bar_pos + Vector2(0.0, -6.0), tree_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 	# Status text on the right (e.g. 75% or Absorbing / Drying)
 	var hp_ratio := clampf(_tree_health / MAX_TREE_HEALTH, 0.0, 1.0)
@@ -1300,7 +1437,8 @@ func _draw_health_bar(_size: Vector2) -> void:
 	var water_bar_pos := Vector2(20.0, 68.0)
 
 	# Title text above the water bar
-	draw_string(_vt323_font, water_bar_pos + Vector2(0.0, -6.0), "WATER", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	var water_title := "SU" if is_tr else "WATER"
+	draw_string(_vt323_font, water_bar_pos + Vector2(0.0, -6.0), water_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 	# Water amount in Liters on the right (1px water source = 1L)
 	var water_str := "%dL" % int(roundf(_water_stored))
@@ -1325,7 +1463,8 @@ func _draw_health_bar(_size: Vector2) -> void:
 	var poll_bar_pos := Vector2(20.0, 110.0)
 
 	# Title text above the air pollution bar
-	draw_string(_vt323_font, poll_bar_pos + Vector2(0.0, -6.0), "AIR POLLUTION", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	var poll_title := "HAVA KİRLİLİĞİ" if is_tr else "AIR POLLUTION"
+	draw_string(_vt323_font, poll_bar_pos + Vector2(0.0, -6.0), poll_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 	# Pollution percentage on the right
 	var poll_ratio := clampf(_air_pollution / MAX_AIR_POLLUTION, 0.0, 1.0)
@@ -1378,9 +1517,15 @@ func _draw_grow_button(size: Vector2, mid: float) -> void:
 	draw_rect(btn_rect, Color(1.0, 1.0, 1.0, 0.35), false, 1.0)
 
 	# Centered label "GROW" / "TREE" / "(50L)"
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
 	var text_col := Color.WHITE if can_grow else Color(0.7, 0.7, 0.7, 0.85)
-	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 28.0), "GROW", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
-	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 50.0), "TREE", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
+	var grow_l1 := "AĞACI" if is_tr else "GROW"
+	var grow_l2 := "BÜYÜT" if is_tr else "TREE"
+	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 28.0), grow_l1, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
+	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 50.0), grow_l2, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
 	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 72.0), "(50L)", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 18, Color("bfe3f5") if can_grow else text_col)
 
 
@@ -1417,13 +1562,22 @@ func _draw_game_over_overlay(size: Vector2) -> void:
 
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.72))
 
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
 	var center_y := size.y * 0.45
-	var title_text := "YOU WIN" if _is_game_won else "GAME OVER"
+	var title_text := ""
+	if _is_game_won:
+		title_text = "KAZANDINIZ" if is_tr else "YOU WIN"
+	else:
+		title_text = "OYUN BİTTİ" if is_tr else "GAME OVER"
 	var title_col := Color("4caf50") if _is_game_won else Color("ff5252")
 
 	draw_string(_vt323_font, Vector2(0.0, center_y), title_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 72, title_col)
 	draw_string(_vt323_font, Vector2(0.0, center_y + 45.0), _game_over_reason, HORIZONTAL_ALIGNMENT_CENTER, size.x, 32, Color.WHITE)
-	draw_string(_vt323_font, Vector2(0.0, center_y + 90.0), "CLICK OR PRESS R TO RESTART", HORIZONTAL_ALIGNMENT_CENTER, size.x, 26, Color("bfe3f5"))
+	var restart_msg := "YENİDEN BAŞLATMAK İÇİN TIKLAYIN VEYA R'YE BASIN" if is_tr else "CLICK OR PRESS R TO RESTART"
+	draw_string(_vt323_font, Vector2(0.0, center_y + 90.0), restart_msg, HORIZONTAL_ALIGNMENT_CENTER, size.x, 26, Color("bfe3f5"))
 
 
 func _draw_sky(size: Vector2, mid: float) -> void:
@@ -1801,4 +1955,3 @@ func _update_water_flow_path() -> void:
 				break
 			curr = parent_map[curr]
 			step_count += 1
-
