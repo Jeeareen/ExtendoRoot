@@ -688,6 +688,9 @@ func _draw_narrative_text(size: Vector2) -> void:
 	if not _vt323_font:
 		return
 
+	var mid := size.y * 0.5
+	var soil_center_y := mid + (size.y - mid) * 0.5 # Middle of soil area
+
 	var text := ""
 	var alpha := 0.0
 	var is_final := false
@@ -709,36 +712,43 @@ func _draw_narrative_text(size: Vector2) -> void:
 			alpha = clampf((12.5 - _timer) / 0.7, 0.0, 1.0)
 		else:
 			alpha = 1.0
-	else:
+	elif _timer < 16.5:
 		text = "The fate of the forest is now in your hands."
-		alpha = clampf((_timer - 12.5) / 0.8, 0.0, 1.0)
+		if _timer < 13.3:
+			alpha = (_timer - 12.5) / 0.8
+		elif _timer > 15.8:
+			alpha = clampf((16.5 - _timer) / 0.7, 0.0, 1.0)
+		else:
+			alpha = 1.0
 		is_final = true
-		if _timer >= 16.5:
-			subtext = "[ PRESS SPACE TO BEGIN ]"
+	else:
+		# Text goes away and Begin prompt appears in soil center ("yazı gitsin o gelsın")
+		alpha = 0.0
+		subtext = "[ PRESS SPACE TO BEGIN ]"
 
 	if alpha > 0.01 and text != "":
-		# Letterbox top banner
-		var bar_rect := Rect2(0.0, 36.0, size.x, 68.0)
-		draw_rect(bar_rect, Color(0.04, 0.04, 0.06, 0.72 * alpha))
-		draw_line(Vector2(0.0, 36.0), Vector2(size.x, 36.0), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
-		draw_line(Vector2(0.0, 104.0), Vector2(size.x, 104.0), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
+		# Letterbox banner in soil center
+		var bar_rect := Rect2(0.0, soil_center_y - 34.0, size.x, 68.0)
+		draw_rect(bar_rect, Color(0.04, 0.04, 0.06, 0.78 * alpha))
+		draw_line(Vector2(0.0, bar_rect.position.y), Vector2(size.x, bar_rect.position.y), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
+		draw_line(Vector2(0.0, bar_rect.position.y + 68.0), Vector2(size.x, bar_rect.position.y + 68.0), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
 
 		var text_color := Color.WHITE if not is_final else Color("ffd54f")
 		text_color.a *= alpha
 		# Crisp drop shadow
-		draw_string(_vt323_font, Vector2(2.0, 81.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, Color(0.0, 0.0, 0.0, 0.85 * alpha))
-		draw_string(_vt323_font, Vector2(0.0, 79.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, text_color)
+		draw_string(_vt323_font, Vector2(2.0, soil_center_y + 13.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, Color(0.0, 0.0, 0.0, 0.85 * alpha))
+		draw_string(_vt323_font, Vector2(0.0, soil_center_y + 11.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, text_color)
 
 	if subtext != "":
-		# Pulsing call to action box at center bottom
+		# Pulsing call to action box at soil center
 		var pulse := (sin(_timer * 4.8) + 1.0) * 0.5
 		var sub_color := Color("ffd54f").lerp(Color.WHITE, pulse)
 		var box_w := 360.0
-		var box_h := 46.0
-		var box_pos := Vector2((size.x - box_w) * 0.5, size.y * 0.74)
-		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.0, 0.0, 0.0, 0.75))
+		var box_h := 48.0
+		var box_pos := Vector2((size.x - box_w) * 0.5, soil_center_y - box_h * 0.5)
+		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.0, 0.0, 0.0, 0.82))
 		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), sub_color, false, 2.0)
-		draw_string(_vt323_font, Vector2(box_pos.x, box_pos.y + 32.0), subtext, HORIZONTAL_ALIGNMENT_CENTER, box_w, 32, sub_color)
+		draw_string(_vt323_font, Vector2(box_pos.x, box_pos.y + 33.0), subtext, HORIZONTAL_ALIGNMENT_CENTER, box_w, 32, sub_color)
 
 	# Skip prompt in bottom right
 	if _phase != Phase.READY:

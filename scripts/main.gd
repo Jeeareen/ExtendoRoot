@@ -123,6 +123,10 @@ const ROOT_SFX_HOLD_TIME := 0.14
 var _root_sfx_timer: float = 0.0
 
 var _intro_cutscene: Node2D = null
+var _victory_cutscene: Node2D = null
+
+const WIN_SURVIVAL_TIME := 60.0 # 1 minute survival timer for testing
+var _survival_timer: float = 0.0
 
 var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
 var _tree_health: float = 25.0 # Starts at initial stage (small tree)
@@ -198,17 +202,45 @@ func _on_intro_finished() -> void:
 	if _intro_cutscene:
 		_intro_cutscene.queue_free()
 		_intro_cutscene = null
+	_survival_timer = 0.0
 	queue_redraw()
 
 
+func _trigger_victory() -> void:
+	if _root_grow_player and _root_grow_player.playing:
+		_root_grow_player.stop()
+	_is_lmb_down = false
+	var victory_script = load("res://scripts/victory_cutscene.gd")
+	if victory_script:
+		_victory_cutscene = victory_script.new()
+		_victory_cutscene.finished.connect(_on_victory_finished)
+		_victory_cutscene.replay_requested.connect(_on_victory_finished)
+		add_child(_victory_cutscene)
+	queue_redraw()
+
+
+func _on_victory_finished() -> void:
+	if _victory_cutscene:
+		_victory_cutscene.queue_free()
+		_victory_cutscene = null
+	_restart_game()
+
+
 func _process(delta: float) -> void:
-	if _intro_cutscene != null:
+	if _intro_cutscene != null or _victory_cutscene != null:
 		return
 
 	if _is_game_over:
 		if _root_grow_player and _root_grow_player.playing:
 			_root_grow_player.stop()
 		return
+
+	# Survival countdown for win condition test (1 minute = 60s)
+	_survival_timer += delta
+	if _survival_timer >= WIN_SURVIVAL_TIME:
+		if _tree_health > 0.0 and not _is_game_over:
+			_trigger_victory()
+			return
 
 	if _root_sfx_timer > 0.0:
 		_root_sfx_timer = maxf(0.0, _root_sfx_timer - delta)
@@ -217,7 +249,7 @@ func _process(delta: float) -> void:
 			if _root_grow_player and _root_grow_player.playing:
 				_root_grow_player.stop()
 
-	var needs_redraw := false
+	var needs_redraw := true
 	var intake_this_frame := 0.0
 	var connected_now := false
 
@@ -335,6 +367,7 @@ func _get_grow_button_rect(size: Vector2, mid: float) -> Rect2:
 
 
 func _restart_game() -> void:
+	_survival_timer = 0.0
 	_water_stored = INITIAL_WATER
 	_tree_health = 25.0
 	_air_pollution = 35.0
@@ -542,7 +575,7 @@ func _clamp_scroll() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _intro_cutscene != null:
+	if _intro_cutscene != null or _victory_cutscene != null:
 		return
 
 	var size := get_viewport_rect().size
@@ -607,7 +640,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R and _is_game_over:
+		if event.keycode == KEY_V and not _is_game_over and _victory_cutscene == null:
+			_trigger_victory()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_R and _is_game_over:
 			_restart_game()
 		elif event.keycode == KEY_ESCAPE:
 			var mode := DisplayServer.window_get_mode()
@@ -967,7 +1003,7 @@ func _generate_rocks(cols: int, rows: int) -> void:
 
 
 func _draw() -> void:
-	if _intro_cutscene != null:
+	if _intro_cutscene != null or _victory_cutscene != null:
 		return
 
 	var size := get_viewport_rect().size
@@ -1114,6 +1150,30 @@ func _draw_health_bar(_size: Vector2) -> void:
 
 	# Inner outline
 	draw_rect(Rect2(poll_bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+
+	# --- SURVIVAL TIMER (Win condition test: 1 min countdown) ---
+	var surv_bar_pos := Vector2(20.0, 152.0)
+	var time_left := maxf(0.0, WIN_SURVIVAL_TIME - _survival_timer)
+	var time_str := "%02d:%02d" % [int(time_left) / 60, int(time_left) % 60]
+
+	draw_string(_vt323_font, surv_bar_pos + Vector2(0.0, -6.0), "SURVIVAL (1 MIN)", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	draw_string(_vt323_font, surv_bar_pos + Vector2(bar_w - 60.0, -6.0), time_str, HORIZONTAL_ALIGNMENT_RIGHT, 60.0, font_size, Color("ffd54f"))
+
+	# Outer border/drop shadow
+	draw_rect(Rect2(surv_bar_pos - Vector2(border_w, border_w), Vector2(bar_w + border_w * 2.0, bar_h + border_w * 2.0)), Color(0, 0, 0, 0.7))
+	# Inner dark background
+	draw_rect(Rect2(surv_bar_pos, Vector2(bar_w, bar_h)), Color(0.12, 0.12, 0.12, 0.85))
+
+	var surv_ratio := clampf(_survival_timer / WIN_SURVIVAL_TIME, 0.0, 1.0)
+	var surv_fill_w := bar_w * surv_ratio
+	if surv_fill_w > 0.0:
+		var surv_color := Color("81c784").lerp(Color("ffd54f"), surv_ratio)
+		draw_rect(Rect2(surv_bar_pos, Vector2(surv_fill_w, bar_h)), surv_color)
+		draw_rect(Rect2(surv_bar_pos, Vector2(surv_fill_w, bar_h * 0.4)), Color(1.0, 1.0, 1.0, 0.25))
+
+	# Inner outline
+	draw_rect(Rect2(surv_bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+	draw_string(_vt323_font, surv_bar_pos + Vector2(0.0, bar_h + 16.0), "[V] QUICK TEST WIN", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 1.0, 1.0, 0.6))
 
 
 func _draw_grow_button(size: Vector2, mid: float) -> void:
