@@ -118,6 +118,9 @@ var _root_sfx_timer: float = 0.0
 var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
 var _tree_health: float = 25.0 # Starts at initial stage (small tree)
 var _air_pollution: float = 35.0
+const GAME_DURATION := 60.0
+var _game_timer: float = GAME_DURATION
+var _is_game_won: bool = false
 var _is_game_over: bool = false
 var _game_over_reason: String = ""
 var _is_grow_btn_hovered: bool = false
@@ -129,8 +132,10 @@ const WIND_SWAY_FREQ := 5.5
 const WIND_MAX_SWAY_PX := 2.5 # Max leaf sway in sprite pixels
 var _wind_time: float = 0.0
 var _wind_strength: float = 0.0
-var _wind_target_strength: float = 0.85
+var _wind_target_strength: float = 0.0
 var _wind_direction: float = 1.0 # 1.0 = blowing right, -1.0 = blowing left
+var _is_wind_active: bool = false
+var _wind_state_timer: float = 1.5
 var _wind_gust_particles: Array = []
 var _leaf_particles: Array = []
 var _leaf_spawn_timer: float = 0.0
@@ -153,8 +158,10 @@ var _current_trunk_rect: Rect2 = SPRITE_RECT_SMALLROOT
 var _prev_trunk_rect: Rect2 = SPRITE_RECT_SMALLROOT
 var _trunk_dissolve_t: float = 1.0
 
-# Weather cycle (cycles every 5 seconds: Wind -> Heat Wave -> Acid Rain)
-const WEATHER_CYCLE_DURATION := 5.0
+# Weather cycle (Wind -> Heat Wave -> Acid Rain)
+const WEATHER_DURATION_WIND := 10.0
+const WEATHER_DURATION_HEATWAVE := 5.0
+const WEATHER_DURATION_ACID_RAIN := 5.0
 const WEATHER_WIND := 0
 const WEATHER_HEATWAVE := 1
 const WEATHER_ACID_RAIN := 2
@@ -167,7 +174,7 @@ const SUN_HEAT_COLOR := Color("ffb347")
 var _weather_state: int = WEATHER_WIND
 var _is_heatwave: bool = false
 var _is_acid_rain: bool = false
-var _weather_cycle_timer: float = WEATHER_CYCLE_DURATION
+var _weather_cycle_timer: float = WEATHER_DURATION_WIND
 var _heatwave_intensity: float = 0.0 # Smoothly transitions 0.0 -> 1.0 during heatwave
 var _acid_rain_intensity: float = 0.0 # Smoothly transitions 0.0 -> 1.0 during acid rain
 var _acid_rain_drops: Array = []
@@ -270,9 +277,16 @@ func _process(delta: float) -> void:
 	if _update_heatwave(delta):
 		needs_redraw = true
 
-	# Tree health decreases continuously over time (2x faster during a heat wave or acid rain), and only increases via GROW TREE
+	if _update_wind(delta):
+		needs_redraw = true
+
+	# Tree health decreases only when the tree is oscillating during the wind state (or 2x faster during a heat wave or acid rain), and only increases via GROW TREE
 	var old_hp := _tree_health
-	var current_health_decay := HEALTH_DECAY_RATE * (2.0 if (_is_heatwave or _is_acid_rain) else 1.0)
+	var current_health_decay := 0.0
+	if _is_heatwave or _is_acid_rain:
+		current_health_decay = HEALTH_DECAY_RATE * 2.0
+	elif _is_tree_oscillating():
+		current_health_decay = HEALTH_DECAY_RATE
 	_tree_health = maxf(0.0, _tree_health - current_health_decay * delta)
 	if not is_equal_approx(old_hp, _tree_health):
 		needs_redraw = true
@@ -291,18 +305,30 @@ func _process(delta: float) -> void:
 	if not is_equal_approx(old_pollution, _air_pollution):
 		needs_redraw = true
 
+	var prev_second := int(ceilf(_game_timer))
+	_game_timer = maxf(0.0, _game_timer - delta)
+	if int(ceilf(_game_timer)) != prev_second:
+		needs_redraw = true
+
+	# Check Win condition: timer hits 0:00
+	if _game_timer <= 0.0 and not _is_game_over:
+		_game_timer = 0.0
+		_is_game_over = true
+		_is_game_won = true
+		_game_over_reason = "You helped the Humans to breath fresh air"
+		needs_redraw = true
+
 	# Check Game Over conditions: air pollution reaches max or water reaches 0
 	if _air_pollution >= MAX_AIR_POLLUTION:
 		_is_game_over = true
+		_is_game_won = false
 		_game_over_reason = "AIR POLLUTION REACHED 100%"
 		needs_redraw = true
 	elif _water_stored <= 0.0:
 		_water_stored = 0.0
 		_is_game_over = true
+		_is_game_won = false
 		_game_over_reason = "WATER DEPLETED (0L)"
-		needs_redraw = true
-
-	if _update_wind(delta):
 		needs_redraw = true
 
 	if _update_tree_transitions(delta):
@@ -358,15 +384,19 @@ func _restart_game() -> void:
 	_tree_health = 25.0
 	_air_pollution = 35.0
 	_is_game_over = false
+	_is_game_won = false
 	_game_over_reason = ""
+	_game_timer = GAME_DURATION
 	_weather_state = WEATHER_WIND
 	_is_heatwave = false
 	_is_acid_rain = false
-	_weather_cycle_timer = WEATHER_CYCLE_DURATION
+	_weather_cycle_timer = WEATHER_DURATION_WIND
 	_heatwave_intensity = 0.0
 	_acid_rain_intensity = 0.0
 	_wind_strength = 0.0
-	_wind_target_strength = 0.85
+	_wind_target_strength = 0.0
+	_is_wind_active = false
+	_wind_state_timer = 1.5
 	_wind_direction = -1.0 if _wind_rng.randf() < 0.5 else 1.0
 	_current_leaf_rect = _get_target_leaf_rect()
 	_prev_leaf_rect = _current_leaf_rect
@@ -375,25 +405,48 @@ func _restart_game() -> void:
 	_leaf_dissolve_t = 1.0
 	_trunk_dissolve_t = 1.0
 	_soil_scroll_y = 0.0
+	_is_lmb_down = false
+	_has_last_drag_cell = false
+	_active_drag_Safe_tiles.clear()
+	_active_drag_history.clear()
+	_root_sfx_timer = 0.0
+	if _root_grow_player and _root_grow_player.playing:
+		_root_grow_player.stop()
 	_generate_world()
 	queue_redraw()
+
+
+func _get_weather_duration(state: int) -> float:
+	match state:
+		WEATHER_WIND:
+			return WEATHER_DURATION_WIND
+		WEATHER_HEATWAVE:
+			return WEATHER_DURATION_HEATWAVE
+		WEATHER_ACID_RAIN:
+			return WEATHER_DURATION_ACID_RAIN
+		_:
+			return 5.0
 
 
 func _update_heatwave(delta: float) -> bool:
 	var changed := false
 	_weather_cycle_timer -= delta
 	if _weather_cycle_timer <= 0.0:
-		_weather_cycle_timer += WEATHER_CYCLE_DURATION
 		_weather_state = (_weather_state + 1) % 3
+		_weather_cycle_timer += _get_weather_duration(_weather_state)
 		_is_heatwave = (_weather_state == WEATHER_HEATWAVE)
 		_is_acid_rain = (_weather_state == WEATHER_ACID_RAIN)
 
 		if _weather_state == WEATHER_WIND:
-			_wind_target_strength = _wind_rng.randf_range(0.75, 1.0)
+			_is_wind_active = false
+			_wind_target_strength = 0.0
+			_wind_state_timer = _wind_rng.randf_range(1.2, 1.8)
 			_wind_direction = -1.0 if _wind_rng.randf() < 0.5 else 1.0
 		elif _weather_state == WEATHER_HEATWAVE:
+			_is_wind_active = false
 			_wind_target_strength = 0.0
 		elif _weather_state == WEATHER_ACID_RAIN:
+			_is_wind_active = false
 			_wind_target_strength = 0.0
 			_contaminate_unconnected_water_sources()
 		changed = true
@@ -580,14 +633,30 @@ func _init_wind_particles() -> void:
 		})
 
 
+func _is_tree_oscillating() -> bool:
+	return _wind_strength > 0.05
+
+
 func _update_wind(delta: float) -> bool:
-	# Wind is active only during the 10-second wind phase
-	_wind_target_strength = 0.85 if _weather_state == WEATHER_WIND else 0.0
+	if _weather_state == WEATHER_WIND:
+		_wind_state_timer -= delta
+		if _wind_state_timer <= 0.0:
+			_is_wind_active = not _is_wind_active
+			if _is_wind_active:
+				_wind_target_strength = _wind_rng.randf_range(0.75, 1.0)
+				_wind_direction = -1.0 if _wind_rng.randf() < 0.5 else 1.0
+				_wind_state_timer = _wind_rng.randf_range(1.8, 2.6)
+			else:
+				_wind_target_strength = 0.0
+				_wind_state_timer = _wind_rng.randf_range(1.2, 1.8)
+	else:
+		_is_wind_active = false
+		_wind_target_strength = 0.0
 
 	var prev_strength := _wind_strength
-	_wind_strength = move_toward(_wind_strength, _wind_target_strength, delta * 0.8)
+	_wind_strength = move_toward(_wind_strength, _wind_target_strength, delta * 2.2)
 
-	if _wind_strength > 0.01:
+	if _is_tree_oscillating():
 		_wind_time += delta * (0.6 + _wind_strength * 0.8)
 		var size := get_viewport_rect().size
 		var mid := size.y * 0.5
@@ -710,7 +779,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R and _is_game_over:
+		if event.keycode == KEY_R:
 			_restart_game()
 		elif event.keycode == KEY_ESCAPE:
 			var mode := DisplayServer.window_get_mode()
@@ -1120,6 +1189,7 @@ func _draw() -> void:
 	_draw_leaf_particles(mid)
 	_draw_soil_grid(size, mid)
 	_draw_health_bar(size)
+	_draw_countdown_timer(size)
 	_draw_grow_button(size, mid)
 	if _is_game_over:
 		_draw_game_over_overlay(size)
@@ -1304,6 +1374,33 @@ func _draw_grow_button(size: Vector2, mid: float) -> void:
 	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 72.0), "(50L)", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 18, Color("bfe3f5") if can_grow else text_col)
 
 
+func _draw_countdown_timer(size: Vector2) -> void:
+	if not _vt323_font:
+		return
+
+	var total_sec := int(ceilf(_game_timer))
+	var mins := total_sec / 60
+	var secs := total_sec % 60
+	var time_str := "%d:%02d" % [mins, secs]
+
+	var font_size := 36
+	var box_w := 96.0
+	var box_h := 36.0
+	var border_w := 2.0
+	var box_pos := Vector2((size.x - box_w) * 0.5, 16.0)
+
+	# Outer border/drop shadow
+	draw_rect(Rect2(box_pos - Vector2(border_w, border_w), Vector2(box_w + border_w * 2.0, box_h + border_w * 2.0)), Color(0, 0, 0, 0.7))
+	# Dark background
+	draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.12, 0.12, 0.12, 0.85))
+	# Inner outline
+	draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(1.0, 1.0, 1.0, 0.25), false, 1.0)
+
+	# Centered timer text
+	var text_col := Color.WHITE if total_sec > 10 else Color("ff5252")
+	draw_string(_vt323_font, box_pos + Vector2(0.0, 27.0), time_str, HORIZONTAL_ALIGNMENT_CENTER, box_w, font_size, text_col)
+
+
 func _draw_game_over_overlay(size: Vector2) -> void:
 	if not _vt323_font:
 		return
@@ -1311,7 +1408,10 @@ func _draw_game_over_overlay(size: Vector2) -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.72))
 
 	var center_y := size.y * 0.45
-	draw_string(_vt323_font, Vector2(0.0, center_y), "GAME OVER", HORIZONTAL_ALIGNMENT_CENTER, size.x, 72, Color("ff5252"))
+	var title_text := "YOU WIN" if _is_game_won else "GAME OVER"
+	var title_col := Color("4caf50") if _is_game_won else Color("ff5252")
+
+	draw_string(_vt323_font, Vector2(0.0, center_y), title_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 72, title_col)
 	draw_string(_vt323_font, Vector2(0.0, center_y + 45.0), _game_over_reason, HORIZONTAL_ALIGNMENT_CENTER, size.x, 32, Color.WHITE)
 	draw_string(_vt323_font, Vector2(0.0, center_y + 90.0), "CLICK OR PRESS R TO RESTART", HORIZONTAL_ALIGNMENT_CENTER, size.x, 26, Color("bfe3f5"))
 
@@ -1374,9 +1474,11 @@ func _draw_tree_spritesheet(base: Vector2, _mid: float) -> void:
 	var dest_pos := Vector2(root_left_screen_x - 17.0 * tree_pixel_scale, base.y - 37.0 * tree_pixel_scale)
 
 	# Calculate left-right oscillation when there is wind
-	var sway_px := (sin(_wind_time * WIND_SWAY_FREQ) * WIND_MAX_SWAY_PX + _wind_direction * 0.6) * _wind_strength
+	var sway_px := 0.0
+	if _is_tree_oscillating():
+		sway_px = (sin(_wind_time * WIND_SWAY_FREQ) * WIND_MAX_SWAY_PX + _wind_direction * 0.6) * _wind_strength
 	var base_oscillation_x := sway_px * tree_pixel_scale
-	var leaf_offset_x := base_oscillation_x * 0.75
+	var leaf_offset_x := base_oscillation_x * 0.75 * 0.66
 
 	# Constant warm orange tint during heatwave (0.225 opacity), or 50% of the gray tint on the tree during acid rain
 	var heat_alpha := clampf(_heatwave_intensity, 0.0, 1.0) * 0.225
