@@ -120,6 +120,9 @@ var _rain_player: AudioStreamPlayer = null
 var _rock_player: AudioStreamPlayer = null
 const ROOT_SFX_HOLD_TIME := 0.14
 var _root_sfx_timer: float = 0.0
+
+var _intro_cutscene: Node2D = null
+var _victory_cutscene: Node2D = null
 var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
 var _tree_health: float = 25.0 # Starts at initial stage (small tree)
 var _air_pollution: float = 35.0
@@ -241,6 +244,38 @@ func _ready() -> void:
 	_generate_world()
 	_init_wind_particles()
 	_init_acid_rain_drops()
+	var intro_script = load("res://scripts/intro_cutscene.gd")
+	if intro_script:
+		_intro_cutscene = intro_script.new()
+		_intro_cutscene.finished.connect(_on_intro_finished)
+		add_child(_intro_cutscene)
+
+
+func _on_intro_finished() -> void:
+	if _intro_cutscene:
+		_intro_cutscene.queue_free()
+		_intro_cutscene = null
+	queue_redraw()
+
+
+func _trigger_victory() -> void:
+	_stop_all_looping_sfx()
+	_is_lmb_down = false
+	var victory_script = load("res://scripts/victory_cutscene.gd")
+	if victory_script:
+		_victory_cutscene = victory_script.new()
+		_victory_cutscene.finished.connect(_on_victory_finished)
+		add_child(_victory_cutscene)
+	queue_redraw()
+
+
+func _on_victory_finished() -> void:
+	if _victory_cutscene:
+		_victory_cutscene.queue_free()
+		_victory_cutscene = null
+	var tree := get_tree()
+	if tree:
+		tree.change_scene_to_file("res://scenes/main_menu.tscn")
 
 
 func _stop_all_looping_sfx() -> void:
@@ -253,6 +288,9 @@ func _stop_all_looping_sfx() -> void:
 
 
 func _process(delta: float) -> void:
+	if _intro_cutscene != null or _victory_cutscene != null:
+		return
+
 	if _is_paused:
 		_stop_all_looping_sfx()
 		return
@@ -384,13 +422,13 @@ func _process(delta: float) -> void:
 	if GameSettings:
 		is_tr = (GameSettings.language == GameSettings.Language.TR)
 
-	# Check Win condition: timer hits 0:00
+	# Check Win condition: timer hits 0:00 -> Trigger Victory Outro Cutscene
 	if _game_timer <= 0.0 and not _is_game_over:
 		_game_timer = 0.0
 		_is_game_over = true
 		_is_game_won = true
-		_game_over_reason = "İnsanların temiz hava solumasına yardım ettin" if is_tr else "You helped the Humans to breath fresh air"
-		needs_redraw = true
+		_trigger_victory()
+		return
 
 	# Check Game Over conditions: air pollution reaches max or water reaches 0
 	if _air_pollution >= MAX_AIR_POLLUTION:
@@ -823,6 +861,9 @@ func _toggle_pause() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _intro_cutscene != null or _victory_cutscene != null:
+		return
+
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
 	var grow_btn_rect := _get_grow_button_rect(size, mid)
@@ -1331,6 +1372,9 @@ func _generate_rocks(cols: int, rows: int) -> void:
 
 
 func _draw() -> void:
+	if _intro_cutscene != null or _victory_cutscene != null:
+		return
+
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
 	_draw_sky(size, mid)
