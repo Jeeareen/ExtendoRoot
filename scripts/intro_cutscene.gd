@@ -35,6 +35,7 @@ const GRASS := Color("4f8a3c")
 
 var _tree_texture: Texture2D = null
 var _vt323_font: Font = null
+var _fire_player: AudioStreamPlayer = null
 var _rng := RandomNumberGenerator.new()
 
 var _timer: float = 0.0
@@ -53,6 +54,13 @@ func _ready() -> void:
 		_tree_texture = preload("res://scripts/tree_sprite.gd").get_shaded_texture()
 	if ResourceLoader.exists("res://assets/VT323-Regular.ttf"):
 		_vt323_font = load("res://assets/VT323-Regular.ttf")
+	if ResourceLoader.exists("res://assets/fire.mp3"):
+		var fire_stream := load("res://assets/fire.mp3")
+		if fire_stream is AudioStreamMP3:
+			fire_stream.loop = true
+		_fire_player = AudioStreamPlayer.new()
+		_fire_player.stream = fire_stream
+		add_child(_fire_player)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -77,6 +85,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _complete() -> void:
+	if _fire_player and _fire_player.playing:
+		_fire_player.stop()
 	finished.emit()
 
 
@@ -97,6 +107,19 @@ func _process(delta: float) -> void:
 		_phase = Phase.AFTERMATH
 	else:
 		_phase = Phase.READY
+
+	# Play fire SFX while the forest burns (7.0s - 13.0s)
+	if _fire_player:
+		if _timer >= 7.0 and _timer < 13.0:
+			if not _fire_player.playing:
+				_fire_player.volume_db = 0.0
+				_fire_player.play()
+			if _timer > 11.5:
+				var fade := clampf((13.0 - _timer) / 1.5, 0.001, 1.0)
+				_fire_player.volume_db = linear_to_db(fade)
+		else:
+			if _fire_player.playing:
+				_fire_player.stop()
 
 	var size := get_viewport_rect().size
 	var mid := size.y * 0.5
@@ -694,13 +717,17 @@ func _draw_narrative_text(size: Vector2) -> void:
 	var mid := size.y * 0.5
 	var soil_center_y := mid + (size.y - mid) * 0.5 # Middle of soil area
 
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
 	var text := ""
 	var alpha := 0.0
 	var is_final := false
 	var subtext := ""
 
 	if _timer < 6.0:
-		text = "A peaceful forest, full of beautiful life..."
+		text = "Yüzyıllardır süren kusursuz bir denge; temiz bir hava, canlı bir orman..." if is_tr else "A perfect balance built over centuries; fresh air, a thriving forest..."
 		if _timer < 0.8:
 			alpha = _timer / 0.8
 		elif _timer > 5.2:
@@ -708,7 +735,7 @@ func _draw_narrative_text(size: Vector2) -> void:
 		else:
 			alpha = 1.0
 	elif _timer < 12.5:
-		text = "A single careless spark... turned forest to ashes."
+		text = "Kurak bir rüzgar ve bir anlık dikkatsizlik... Ekolojik zincir koptu, alevler her yeri sardı." if is_tr else "An arid wind and a moment of neglect... The ecological chain broke, and flames took over."
 		if _timer < 6.8:
 			alpha = (_timer - 6.0) / 0.8
 		elif _timer > 11.8:
@@ -716,7 +743,7 @@ func _draw_narrative_text(size: Vector2) -> void:
 		else:
 			alpha = 1.0
 	elif _timer < 16.5:
-		text = "The fate of the forest is now in your hands."
+		text = "Küllerin altında kadim bir ağaç direniyor. Derinlere dal, suyu bul ve hayatı geri getir!" if is_tr else "Beneath the ash, an ancient tree resists. Dive deep, find water, and bring life back!"
 		if _timer < 13.3:
 			alpha = (_timer - 12.5) / 0.8
 		elif _timer > 15.8:
@@ -727,32 +754,72 @@ func _draw_narrative_text(size: Vector2) -> void:
 	else:
 		# Text goes away and Begin prompt appears in soil center ("yazı gitsin o gelsın")
 		alpha = 0.0
-		subtext = "[ PRESS SPACE TO BEGIN ]"
+		subtext = "BAŞLAMAK İÇİN SPACE TUŞUNA BAS" if is_tr else "PRESS SPACE TO BEGIN"
 
 	if alpha > 0.01 and text != "":
-		# Letterbox banner in soil center
-		var bar_rect := Rect2(0.0, soil_center_y - 34.0, size.x, 68.0)
+		# Left and right 10% margins: width is 80% of screen, centered at size.x * 0.10
+		var margin_x := size.x * 0.10
+		var text_area_w := size.x * 0.80
+
+		var font_size := 30 if text.length() > 60 else (34 if text.length() > 40 else 38)
+		if text_area_w < 720.0 and font_size > 26:
+			font_size = 26
+
+		var lines := _wrap_text_lines(text, _vt323_font, font_size, text_area_w)
+		var line_count := maxi(1, lines.size())
+		var line_gap := float(font_size) + 4.0
+
+		# Dynamic Letterbox banner in soil center to fit wrapped lines
+		var bar_height := 36.0 + float(line_count) * line_gap
+		var bar_rect := Rect2(0.0, soil_center_y - bar_height * 0.5, size.x, bar_height)
 		draw_rect(bar_rect, Color(0.04, 0.04, 0.06, 0.78 * alpha))
 		draw_line(Vector2(0.0, bar_rect.position.y), Vector2(size.x, bar_rect.position.y), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
-		draw_line(Vector2(0.0, bar_rect.position.y + 68.0), Vector2(size.x, bar_rect.position.y + 68.0), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
+		draw_line(Vector2(0.0, bar_rect.position.y + bar_height), Vector2(size.x, bar_rect.position.y + bar_height), Color(0.95, 0.82, 0.5, 0.45 * alpha), 1.0)
 
-		var text_color := Color.WHITE if not is_final else Color("ffd54f")
+		var text_color := Color.WHITE
 		text_color.a *= alpha
-		# Crisp drop shadow
-		draw_string(_vt323_font, Vector2(2.0, soil_center_y + 13.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, Color(0.0, 0.0, 0.0, 0.85 * alpha))
-		draw_string(_vt323_font, Vector2(0.0, soil_center_y + 11.0), text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 38, text_color)
+
+		# Vertically center all lines inside the banner
+		var first_line_y := soil_center_y - (float(line_count - 1) * line_gap * 0.5) + (float(font_size) * 0.32)
+		for li in line_count:
+			var ly := first_line_y + float(li) * line_gap
+			var ltxt := lines[li]
+			draw_string(_vt323_font, Vector2(margin_x + 2.0, ly + 2.0), ltxt, HORIZONTAL_ALIGNMENT_CENTER, text_area_w, font_size, Color(0.0, 0.0, 0.0, 0.85 * alpha))
+			draw_string(_vt323_font, Vector2(margin_x, ly), ltxt, HORIZONTAL_ALIGNMENT_CENTER, text_area_w, font_size, text_color)
 
 	if subtext != "":
 		# Pulsing call to action box at soil center
 		var pulse := (sin(_timer * 4.8) + 1.0) * 0.5
-		var sub_color := Color("ffd54f").lerp(Color.WHITE, pulse)
-		var box_w := 360.0
+		var prompt_col := Color("ffd54f").lerp(Color.WHITE, pulse)
+		var box_w := 460.0 if is_tr else 360.0
 		var box_h := 48.0
 		var box_pos := Vector2((size.x - box_w) * 0.5, soil_center_y - box_h * 0.5)
 		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.0, 0.0, 0.0, 0.82))
-		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), sub_color, false, 2.0)
-		draw_string(_vt323_font, Vector2(box_pos.x, box_pos.y + 33.0), subtext, HORIZONTAL_ALIGNMENT_CENTER, box_w, 32, sub_color)
+		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), prompt_col, false, 2.0)
+		draw_string(_vt323_font, Vector2(box_pos.x, box_pos.y + 33.0), subtext, HORIZONTAL_ALIGNMENT_CENTER, box_w, 32, prompt_col)
 
 	# Skip prompt in bottom right
 	if _phase != Phase.READY:
-		draw_string(_vt323_font, Vector2(size.x - 170.0, size.y - 24.0), "[ SPACE ] SKIP", HORIZONTAL_ALIGNMENT_RIGHT, 150.0, 22, Color(1.0, 1.0, 1.0, 0.65))
+		var skip_txt := "[SPACE] GEÇ" if is_tr else "[SPACE] SKIP"
+		draw_string(_vt323_font, Vector2(size.x - 190.0, size.y - 24.0), skip_txt, HORIZONTAL_ALIGNMENT_RIGHT, 170.0, 22, Color.WHITE)
+
+
+func _wrap_text_lines(raw_text: String, font: Font, font_size: int, max_width: float) -> Array[String]:
+	var result: Array[String] = []
+	if not font or raw_text == "":
+		return result
+	var words := raw_text.split(" ")
+	var current_line := ""
+	for word in words:
+		if word == "":
+			continue
+		var test_line := word if current_line == "" else current_line + " " + word
+		var measured_w: float = font.get_string_size(test_line, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		if measured_w <= max_width or current_line == "":
+			current_line = test_line
+		else:
+			result.append(current_line)
+			current_line = word
+	if current_line != "":
+		result.append(current_line)
+	return result

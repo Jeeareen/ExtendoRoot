@@ -69,20 +69,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
 			if get_viewport():
 				get_viewport().set_input_as_handled()
-			if _phase == Phase.READY:
-				_complete()
-			else:
-				# Fast-forward to final ready state on first skip, complete on second
-				if _timer < 17.5:
-					_timer = 17.5
-					_phase = Phase.READY
-					for s in _target_seeds:
-						s["landed"] = true
-					for pt in _sprout_points:
-						pt["landed"] = true
-						pt["grow"] = 1.0
-				else:
-					_complete()
+			_complete()
 		elif event.keycode == KEY_ESCAPE:
 			var mode := DisplayServer.window_get_mode()
 			if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
@@ -121,11 +108,11 @@ func _process(delta: float) -> void:
 	# Phase sequence
 	if _timer < 4.5:
 		_phase = Phase.BLOOM_AND_SEEDS
-	elif _timer < 8.5:
+	elif _timer < 5.0:
 		_phase = Phase.SPROUTING
-	elif _timer < 13.5:
+	elif _timer < 14.0:
 		_phase = Phase.FAMILY_RETURN
-	elif _timer < 17.5:
+	elif _timer < 18.5:
 		_phase = Phase.EPILOGUE
 	else:
 		_phase = Phase.READY
@@ -519,11 +506,11 @@ func _draw_sparkles_and_hearts() -> void:
 
 
 func _draw_family_and_embrace(size: Vector2, mid: float) -> void:
-	# Family appears at t >= 8.5s from the right side of the screen
-	if _timer < 8.5:
+	# Family appears at t >= 5.0s from the right side of the screen
+	if _timer < 5.0:
 		return
 
-	var enter_time := _timer - 8.5
+	var enter_time := _timer - 5.0
 	var walk_phase := enter_time * 9.0
 
 	var center_x := size.x * 0.5
@@ -531,12 +518,12 @@ func _draw_family_and_embrace(size: Vector2, mid: float) -> void:
 	var mom_target_x := size.x * 0.70
 	var kid_target_x := center_x + 6.0
 
-	# Child runs quickly to the tree in 2.2s (reaches trunk at t = 10.7s)
+	# Child runs quickly to the tree in 2.2s (reaches trunk at t = 7.2s)
 	var kid_run_t := clampf(enter_time / 2.2, 0.0, 1.0)
 	var kid_x := lerpf(size.x + 20.0, kid_target_x, kid_run_t)
 	var kid_is_hugging := kid_run_t >= 1.0
 
-	# Parents walk in 3.0s (reach position at t = 11.5s)
+	# Parents walk in 3.0s (reach position at t = 8.0s)
 	var parent_walk_t := clampf(enter_time / 3.0, 0.0, 1.0)
 	var dad_x := lerpf(size.x + 40.0, dad_target_x, parent_walk_t)
 	var mom_x := lerpf(size.x + 65.0, mom_target_x, parent_walk_t)
@@ -648,14 +635,19 @@ func _draw_narrative_text(size: Vector2) -> void:
 	var mid := size.y * 0.5
 	var soil_center_y := mid + (size.y - mid) * 0.5 # Center of underground soil area
 
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
 	var main_text := ""
-	var sub_text := ""
+	var sub_text_line1 := ""
+	var sub_text_line2 := ""
 	var banner_alpha := 0.0
 	var is_final := false
 	var cta_prompt := ""
 
 	if _timer < 4.5:
-		main_text = "From a single survivor, life found a way."
+		main_text = "Kökler toprağa tutundukça, yaşam küllerin arasından yeniden doğdu." if is_tr else "As roots held onto the earth, life was reborn from the ashes."
 		if _timer < 0.8:
 			banner_alpha = _timer / 0.8
 		elif _timer > 3.8:
@@ -663,28 +655,37 @@ func _draw_narrative_text(size: Vector2) -> void:
 		else:
 			banner_alpha = 1.0
 
-	elif _timer < 8.5:
-		# Sprouting phase: brief tranquil pause as trees take root
+	elif _timer < 5.0:
+		# Brief 0.5s pause between stage 1 and stage 2
 		banner_alpha = 0.0
 
-	elif _timer < 13.5:
-		# Family return & remorseful educational message
-		main_text = "Our carelessness almost took everything. We promise to protect the forest forever."
-		sub_text = "Never leave a campfire unattended. One spark can destroy a lifetime."
-		if _timer < 9.3:
-			banner_alpha = (_timer - 8.5) / 0.8
-		elif _timer > 12.8:
-			banner_alpha = clampf((13.5 - _timer) / 0.7, 0.0, 1.0)
+	elif _timer < 14.0:
+		# Family return & remorseful educational message (Split across 3 lines: main text + 2 subtitle lines)
+		main_text = "Doğa bize ikinci bir şans verdi; şimdi borcumuzu onu koruyarak ödeme vakti." if is_tr else "Nature gave us a second chance; time to repay our debt by protecting it."
+		if is_tr:
+			sub_text_line1 = "Ormanlar yalnızca ağaç değil; suyumuzu tutan"
+			sub_text_line2 = "ve karbonu hapseden yaşam kalkanıdır."
+		else:
+			sub_text_line1 = "Forests are not just trees; they are life shields"
+			sub_text_line2 = "holding water and trapping carbon."
+		if _timer < 5.8:
+			banner_alpha = (_timer - 5.0) / 0.8
+		elif _timer > 13.3:
+			banner_alpha = clampf((14.0 - _timer) / 0.7, 0.0, 1.0)
 		else:
 			banner_alpha = 1.0
 
-	elif _timer < 17.5:
+	elif _timer < 14.5:
+		# Brief 0.5s pause between stage 2 and stage 3
+		banner_alpha = 0.0
+
+	elif _timer < 18.5:
 		# Closing narrative
-		main_text = "The forest breathes again... thanks to you."
-		if _timer < 14.3:
-			banner_alpha = (_timer - 13.5) / 0.8
-		elif _timer > 16.8:
-			banner_alpha = clampf((17.5 - _timer) / 0.7, 0.0, 1.0)
+		main_text = "Orman yeniden nefes alıyor... Doğayla barış içinde bir gelecek için." if is_tr else "The forest breathes again... For a future in peace with nature."
+		if _timer < 15.3:
+			banner_alpha = (_timer - 14.5) / 0.8
+		elif _timer > 17.8:
+			banner_alpha = clampf((18.5 - _timer) / 0.7, 0.0, 1.0)
 		else:
 			banner_alpha = 1.0
 		is_final = true
@@ -692,38 +693,67 @@ func _draw_narrative_text(size: Vector2) -> void:
 	else:
 		# When Continue prompt arrives, text is gone ("contiune gelince yazı gitsin o gelsın")
 		banner_alpha = 0.0
-		cta_prompt = "[ PRESS SPACE TO CONTINUE ]"
+		cta_prompt = "DEVAM ETMEK İÇİN SPACE TUŞUNA BAS" if is_tr else "PRESS SPACE TO CONTINUE"
 
 	# Draw Narrative Banner in the middle of the soil
 	if banner_alpha > 0.01 and main_text != "":
-		var bar_height := 92.0 if sub_text != "" else 64.0
+		# Left and right 10% margins: width is 80% of screen, centered at size.x * 0.10
+		var margin_x := size.x * 0.10
+		var text_area_w := size.x * 0.80
+
+		var main_font_size := 30 if main_text.length() > 60 else (34 if main_text.length() > 40 else 38)
+		if text_area_w < 720.0 and main_font_size > 26:
+			main_font_size = 26
+
+		var main_lines := _wrap_text_lines(main_text, _vt323_font, main_font_size, text_area_w)
+		var has_sub := sub_text_line1 != ""
+
+		var sub_font_size := 24
+		if text_area_w < 720.0:
+			sub_font_size = 20
+
+		var sub_lines: Array[String] = []
+		if has_sub:
+			sub_lines.append_array(_wrap_text_lines(sub_text_line1, _vt323_font, sub_font_size, text_area_w))
+			sub_lines.append_array(_wrap_text_lines(sub_text_line2, _vt323_font, sub_font_size, text_area_w))
+
+		var main_line_gap := float(main_font_size) + 4.0
+		var sub_line_gap := float(sub_font_size) + 4.0
+
+		var total_content_h := float(main_lines.size()) * main_line_gap
+		if has_sub:
+			total_content_h += 8.0 + float(sub_lines.size()) * sub_line_gap
+
+		var bar_height := total_content_h + 30.0
 		var bar_rect := Rect2(0.0, soil_center_y - bar_height * 0.5, size.x, bar_height)
 		draw_rect(bar_rect, Color(0.04, 0.04, 0.06, 0.78 * banner_alpha))
 		draw_line(Vector2(0.0, bar_rect.position.y), Vector2(size.x, bar_rect.position.y), Color(0.65, 0.95, 0.55, 0.50 * banner_alpha), 1.0)
 		draw_line(Vector2(0.0, bar_rect.position.y + bar_height), Vector2(size.x, bar_rect.position.y + bar_height), Color(0.65, 0.95, 0.55, 0.50 * banner_alpha), 1.0)
 
-		var text_color := Color("c8e6c9") if not is_final else Color("ffd54f")
+		var text_color := Color.WHITE
 		text_color.a *= banner_alpha
 
-		var font_size := 32 if main_text.length() > 50 else 38
-		var text_y := soil_center_y - 10.0 if sub_text != "" else soil_center_y + 8.0
+		var current_y := soil_center_y - total_content_h * 0.5 + float(main_font_size) * 0.85
 
-		# Shadow and main text
-		draw_string(_vt323_font, Vector2(2.0, text_y + 2.0), main_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, font_size, Color(0.0, 0.0, 0.0, 0.85 * banner_alpha))
-		draw_string(_vt323_font, Vector2(0.0, text_y), main_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, font_size, text_color)
+		# Draw Main Text Lines
+		for line in main_lines:
+			draw_string(_vt323_font, Vector2(margin_x + 2.0, current_y + 2.0), line, HORIZONTAL_ALIGNMENT_CENTER, text_area_w, main_font_size, Color(0.0, 0.0, 0.0, 0.85 * banner_alpha))
+			draw_string(_vt323_font, Vector2(margin_x, current_y), line, HORIZONTAL_ALIGNMENT_CENTER, text_area_w, main_font_size, text_color)
+			current_y += main_line_gap
 
-		# Subtitle / educational guidance
-		if sub_text != "":
-			var sub_color := Color("fff59d")
-			sub_color.a *= banner_alpha
-			draw_string(_vt323_font, Vector2(2.0, soil_center_y + 26.0), sub_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 26, Color(0.0, 0.0, 0.0, 0.85 * banner_alpha))
-			draw_string(_vt323_font, Vector2(0.0, soil_center_y + 24.0), sub_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 26, sub_color)
+		# Draw Subtitle Lines (if any)
+		if has_sub:
+			current_y += 4.0
+			for s_line in sub_lines:
+				draw_string(_vt323_font, Vector2(margin_x + 2.0, current_y + 2.0), s_line, HORIZONTAL_ALIGNMENT_CENTER, text_area_w, sub_font_size, Color(0.0, 0.0, 0.0, 0.85 * banner_alpha))
+				draw_string(_vt323_font, Vector2(margin_x, current_y), s_line, HORIZONTAL_ALIGNMENT_CENTER, text_area_w, sub_font_size, text_color)
+				current_y += sub_line_gap
 
 	# Call to Action prompt at center of soil (replacing narrative text)
 	if cta_prompt != "":
 		var pulse := (sin(_timer * 4.8) + 1.0) * 0.5
 		var prompt_col := Color("ffd54f").lerp(Color.WHITE, pulse)
-		var box_w := 380.0
+		var box_w := 460.0 if is_tr else 380.0
 		var box_h := 48.0
 		var box_pos := Vector2((size.x - box_w) * 0.5, soil_center_y - box_h * 0.5)
 		draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.0, 0.0, 0.0, 0.82))
@@ -732,4 +762,26 @@ func _draw_narrative_text(size: Vector2) -> void:
 
 	# Skip prompt in bottom right corner
 	if _phase != Phase.READY:
-		draw_string(_vt323_font, Vector2(size.x - 170.0, size.y - 24.0), "[ SPACE ] SKIP", HORIZONTAL_ALIGNMENT_RIGHT, 150.0, 22, Color(1.0, 1.0, 1.0, 0.65))
+		var skip_txt := "[SPACE] GEÇ" if is_tr else "[SPACE] SKIP"
+		draw_string(_vt323_font, Vector2(size.x - 190.0, size.y - 24.0), skip_txt, HORIZONTAL_ALIGNMENT_RIGHT, 170.0, 22, Color.WHITE)
+
+
+func _wrap_text_lines(raw_text: String, font: Font, font_size: int, max_width: float) -> Array[String]:
+	var result: Array[String] = []
+	if not font or raw_text == "":
+		return result
+	var words := raw_text.split(" ")
+	var current_line := ""
+	for word in words:
+		if word == "":
+			continue
+		var test_line := word if current_line == "" else current_line + " " + word
+		var measured_w: float = font.get_string_size(test_line, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		if measured_w <= max_width or current_line == "":
+			current_line = test_line
+		else:
+			result.append(current_line)
+			current_line = word
+	if current_line != "":
+		result.append(current_line)
+	return result

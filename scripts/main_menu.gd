@@ -11,6 +11,7 @@ var _mouse_hovered_lang: String = ""
 
 var _tr_flag_tex: Texture2D = null
 var _uk_flag_tex: Texture2D = null
+var _title_logo_tex: Texture2D = null
 
 enum Language { EN, TR }
 var _current_language: Language = Language.EN
@@ -56,6 +57,10 @@ func _ready() -> void:
 		_tr_flag_tex = load("res://assets/TR.png")
 	if ResourceLoader.exists("res://assets/UK.png"):
 		_uk_flag_tex = load("res://assets/UK.png")
+	if ResourceLoader.exists("res://assets/Extendoroot.png"):
+		_title_logo_tex = load("res://assets/Extendoroot.png")
+	elif ResourceLoader.exists("res://assets/extendoroot.png"):
+		_title_logo_tex = load("res://assets/extendoroot.png")
 
 	if GameSettings:
 		match GameSettings.difficulty:
@@ -157,22 +162,39 @@ func _draw() -> void:
 	if not _vt323_font:
 		return
 
-	# Title "ExtendoRoot" on top
-	var title_text := "ExtendoRoot"
+	# Title "ExtendoRoot" on top (using Extendoroot.png logo if available)
 	var title_y := mid * 0.52
-	var title_size := 72
-	# Drop shadow
-	draw_string(_vt323_font, Vector2(0.0, title_y + 3.0), title_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, title_size, TITLE_SHADOW)
-	draw_string(_vt323_font, Vector2(0.0, title_y), title_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, title_size, TITLE_COLOR)
+	if _title_logo_tex:
+		# Crop tightly to the logo's content region in Extendoroot.png (618x137)
+		var src_rect := Rect2(101.0, 80.0, 618.0, 137.0)
+		var logo_aspect := src_rect.size.x / src_rect.size.y # ~4.51
+		var target_h := minf(mid * 0.45, 96.0)
+		var target_w := target_h * logo_aspect
+		if target_w > size.x * 0.85:
+			target_w = size.x * 0.85
+			target_h = target_w / logo_aspect
+		var logo_center_y := mid * 0.44
+		var dst_rect := Rect2((size.x - target_w) * 0.5, logo_center_y - target_h * 0.5, target_w, target_h)
+		# Subtle drop shadow behind the logo
+		draw_texture_rect_region(_title_logo_tex, Rect2(dst_rect.position + Vector2(0.0, 3.0), dst_rect.size), src_rect, Color(0.0, 0.0, 0.0, 0.6))
+		draw_texture_rect_region(_title_logo_tex, dst_rect, src_rect)
+		title_y = dst_rect.position.y + dst_rect.size.y + 4.0
+	else:
+		var title_text := "ExtendoRoot"
+		var title_size := 72
+		# Drop shadow
+		draw_string(_vt323_font, Vector2(0.0, title_y + 3.0), title_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, title_size, TITLE_SHADOW)
+		draw_string(_vt323_font, Vector2(0.0, title_y), title_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, title_size, TITLE_COLOR)
 
 	# Subtitle / tagline or Submenu breadcrumb
 	var tag_size := 24
 	var tag_text := ""
 	if _menu_state == MenuState.MAIN:
-		tag_text = "GROW ROOTS * SAVE THE AIR" if _current_language == Language.EN else "KÖKLERİ BÜYÜT * HAVAYI KURTAR"
+		tag_text = "GROW ROOTS & SAVE THE AIR" if _current_language == Language.EN else "KÖKLERİ BÜYÜT & HAVAYI KURTAR"
 	else:
 		tag_text = "-- SELECT DIFFICULTY --" if _current_language == Language.EN else "-- ZORLUK SEÇİN --"
-	draw_string(_vt323_font, Vector2(0.0, title_y + 36.0), tag_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, tag_size, Color("bfe3f5"))
+	var tag_y := title_y + (18.0 if _title_logo_tex else 36.0)
+	draw_string(_vt323_font, Vector2(0.0, tag_y), tag_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, tag_size, Color("bfe3f5"))
 
 	# Button stack
 	var buttons := _get_current_buttons()

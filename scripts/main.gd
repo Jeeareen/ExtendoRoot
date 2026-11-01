@@ -120,6 +120,9 @@ const POLLUTION_DECAY_LARGE := 5.0
 
 var _tree_texture: Texture2D = null
 var _tree_white_texture: Texture2D = null
+var _wood_log_texture: Texture2D = null
+var _recovery_fill_texture: Texture2D = null
+var _leaf_btn_texture: Texture2D = null
 var _vt323_font: Font = null
 var _root_grow_player: AudioStreamPlayer = null
 var _wind_player: AudioStreamPlayer = null
@@ -131,7 +134,7 @@ var _root_sfx_timer: float = 0.0
 var _intro_cutscene: Node2D = null
 var _victory_cutscene: Node2D = null
 var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
-var _tree_health: float = 25.0 # Starts at initial stage (small tree)
+var _tree_health: float = 5.0 # Starts at 5 HP (bare small trunk, health 0-10 has no leaves)
 var _air_pollution: float = 35.0
 const GAME_DURATION := 60.0
 var _game_timer: float = GAME_DURATION
@@ -167,8 +170,8 @@ const SPRITE_LEAF_DRY_ORANGE := Color8(242, 166, 94, 255)
 
 # Cross-dissolve state for smooth leaf and trunk transitions
 const DISSOLVE_DURATION := 0.55
-var _current_leaf_rect: Rect2 = SPRITE_RECT_SMALLLEAVES
-var _prev_leaf_rect: Rect2 = SPRITE_RECT_SMALLLEAVES
+var _current_leaf_rect: Rect2 = Rect2()
+var _prev_leaf_rect: Rect2 = Rect2()
 var _current_leaf_offset_px: float = 0.0
 var _prev_leaf_offset_px: float = 0.0
 var _leaf_dissolve_t: float = 1.0
@@ -198,6 +201,105 @@ var _heatwave_intensity: float = 0.0 # Smoothly transitions 0.0 -> 1.0 during he
 var _acid_rain_intensity: float = 0.0 # Smoothly transitions 0.0 -> 1.0 during acid rain
 var _acid_rain_drops: Array = []
 
+# Pixel-art gray rain clouds (one '#' = one 8x8 pixel); rain falls from their underside
+const CLOUD_SHAPE_A := [
+	"....####........",
+	"..########.###..",
+	".##############.",
+	"################",
+	".##############.",
+]
+const CLOUD_SHAPE_B := [
+	"......#####.....",
+	"...##########...",
+	".###############",
+	"################",
+	"..############..",
+]
+const CLOUD_ROW_COLORS := [
+	Color("a9b0b4"),
+	Color("8e969b"),
+	Color("7a8389"),
+	Color("666e74"),
+	Color("565d63"),
+]
+const CLOUD_FX := [0.08, 0.32, 0.58, 0.82]
+const CLOUD_TOP_FRAC := [0.06, 0.15, 0.07, 0.14]
+const CLOUD_DRIFT_SPEED := 10.0
+var _cloud_drift: float = 0.0
+
+const HUD_ICON_X := 20.0
+const HUD_BAR_X := 20.0
+const HUD_ICON_PIXEL := 1.5
+const HUD_ICON_HEART := [
+	"..ooo.ooo..",
+	".o###o###o.",
+	"o#ww######o",
+	"o#########o",
+	"o#########o",
+	".o#######o.",
+	"..o#####o..",
+	"...o###o...",
+	"....o#o....",
+	".....o.....",
+]
+const HUD_ICON_HEART_COLORS := {"o": Color("4a0d0d"), "#": Color("e53935"), "w": Color("ff8a80")}
+const HUD_ICON_DROP := [
+	".....o.....",
+	"....o#o....",
+	"....o#o....",
+	"...o###o...",
+	"...o###o...",
+	"..o#w###o..",
+	".o##w####o.",
+	".o#######o.",
+	".o#######o.",
+	"..o#####o..",
+	"...ooooo...",
+]
+const HUD_ICON_DROP_COLORS := {"o": Color("1a3d5c"), "#": Color("3498db"), "w": Color("bfe3f5")}
+const HUD_ICON_SMOKE := [
+	"....ooo....",
+	"..oo###oo..",
+	".o#w#####oo",
+	"o#########o",
+	"o#########o",
+	".ooooooooo.",
+]
+const HUD_ICON_SMOKE_COLORS := {"o": Color("3a3d40"), "#": Color("9aa0a6"), "w": Color("dcdde1")}
+const RECOVERY_SPROUT_LEAVES := [
+	".............oo.",
+	"...........oo##o",
+	"o........oo###vo",
+	"oo.....oo###v##o",
+	"o#o...o###v###o.",
+	"o##o.o###v####o.",
+	"o#v#o###v####o..",
+	".o#vo##v####o...",
+	".o##o#v####o....",
+	"..ooo#####o.....",
+	"...o.o###o......",
+	"...o.oooo.......",
+]
+const RECOVERY_SPROUT_COLORS := {
+	"o": Color("2a3b1c"),
+	"v": Color("2f4724"),
+	"#": Color("476e3f"),
+}
+
+# Water bar bubbles, pollution flash timers & HUD bar animation timer
+var _water_bar_bubbles: Array = []
+var _water_ghost_stored: float = INITIAL_WATER
+var _water_ghost_hold: float = 0.0
+var _pollution_flash_time: float = 0.0
+var _hud_anim_time: float = 0.0
+var _pollution_rising_tint: float = 0.0
+
+# Grow button hover expansion, spring press animation & burst leaf particles
+var _grow_btn_hover_scale: float = 1.0
+var _grow_btn_spring_time: float = 0.0
+var _grow_btn_leaf_particles: Array = []
+
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -220,6 +322,20 @@ func _ready() -> void:
 		_rocks_texture = load("res://assets/Rocks.png")
 		if _rocks_texture:
 			_rocks_image = _rocks_texture.get_image()
+	if ResourceLoader.exists("res://assets/wood_log.png"):
+		_wood_log_texture = load("res://assets/wood_log.png")
+	if ResourceLoader.exists("res://assets/recovery_fill.png"):
+		_recovery_fill_texture = load("res://assets/recovery_fill.png")
+	if not _recovery_fill_texture and FileAccess.file_exists("res://assets/recovery_fill.png"):
+		var rec_img := Image.load_from_file(ProjectSettings.globalize_path("res://assets/recovery_fill.png"))
+		if rec_img:
+			_recovery_fill_texture = ImageTexture.create_from_image(rec_img)
+	if ResourceLoader.exists("res://assets/leaf.png"):
+		_leaf_btn_texture = load("res://assets/leaf.png")
+	if not _leaf_btn_texture and FileAccess.file_exists("res://assets/leaf.png"):
+		var lf_img := Image.load_from_file(ProjectSettings.globalize_path("res://assets/leaf.png"))
+		if lf_img:
+			_leaf_btn_texture = ImageTexture.create_from_image(lf_img)
 	_vt323_font = load("res://assets/VT323-Regular.ttf")
 	if ResourceLoader.exists("res://assets/root_grow.mp3"):
 		var sfx_stream := load("res://assets/root_grow.mp3")
@@ -412,6 +528,7 @@ func _process(delta: float) -> void:
 	# When health > 20, the tree has green leaves and decreases air pollution at a rate scaled by tree health
 	# (slowly at 20-40 HP, faster as health approaches 80-100 HP). When <= 20 HP (dry leaves), pollution rises.
 	var old_pollution := _air_pollution
+	var is_pollution_rising := _tree_health <= 20.0 and _air_pollution < MAX_AIR_POLLUTION
 	if _tree_health <= 20.0:
 		_air_pollution = minf(MAX_AIR_POLLUTION, _air_pollution + POLLUTION_RISE_RATE * delta)
 	else:
@@ -419,12 +536,78 @@ func _process(delta: float) -> void:
 		var decay_rate := lerpf(POLLUTION_DECAY_SMALL, POLLUTION_DECAY_LARGE, health_factor)
 		_air_pollution = maxf(0.0, _air_pollution - decay_rate * delta)
 
+	_pollution_rising_tint = move_toward(_pollution_rising_tint, 1.0 if is_pollution_rising else 0.0, delta * 2.5)
+
 	if not is_equal_approx(old_pollution, _air_pollution):
 		needs_redraw = true
+
+	_hud_anim_time += delta
+	if _water_ghost_stored > _water_stored:
+		if _water_ghost_hold > 0.0:
+			_water_ghost_hold = maxf(0.0, _water_ghost_hold - delta)
+		else:
+			_water_ghost_stored = move_toward(_water_ghost_stored, _water_stored, 65.0 * delta)
+	else:
+		_water_ghost_stored = _water_stored
+		_water_ghost_hold = 0.0
+	needs_redraw = true
 
 	var prev_second := int(ceilf(_game_timer))
 	_game_timer = maxf(0.0, _game_timer - delta)
 	if int(ceilf(_game_timer)) != prev_second:
+		needs_redraw = true
+
+	# Flash pollution bar when air pollution > 80% (80% of MAX_AIR_POLLUTION)
+	if _air_pollution >= 80.0:
+		_pollution_flash_time += delta
+		needs_redraw = true
+	else:
+		_pollution_flash_time = 0.0
+
+	# Spawn and update bubbles in the water bar when water is increasing
+	var is_water_increasing := _active_water_intake_rate > 0.001
+	if is_water_increasing and _water_stored < MAX_WATER_STORED:
+		if _wind_rng.randf() < 0.45:
+			_water_bar_bubbles.append({
+				"rel_x": _wind_rng.randf_range(0.05, 0.95), # relative to water fill width
+				"y": 18.0, # starts near bottom of water bar (bar_h = 18.0)
+				"speed": _wind_rng.randf_range(20.0, 35.0),
+				"size": 2.0 if _wind_rng.randf() < 0.65 else 3.0,
+				"wobble_phase": _wind_rng.randf_range(0.0, TAU)
+			})
+		needs_redraw = true
+
+	if not _water_bar_bubbles.is_empty():
+		for bi in range(_water_bar_bubbles.size() - 1, -1, -1):
+			var b: Dictionary = _water_bar_bubbles[bi]
+			b["y"] -= b["speed"] * delta
+			if b["y"] <= 1.0:
+				_water_bar_bubbles.remove_at(bi)
+		needs_redraw = true
+
+	# Update grow button hover scale transition & spring animation
+	var can_grow_now := _water_stored > 50.0 and not _is_game_over
+	var target_hover_scale := 1.15 if (_is_grow_btn_hovered and can_grow_now) else 1.0
+	_grow_btn_hover_scale = move_toward(_grow_btn_hover_scale, target_hover_scale, delta * 4.5)
+	if _grow_btn_spring_time > 0.0:
+		_grow_btn_spring_time = maxf(0.0, _grow_btn_spring_time - delta)
+		needs_redraw = true
+
+	# Update tiny burst leaf particles (only live on the top half of the screen)
+	if not _grow_btn_leaf_particles.is_empty():
+		var mid_screen := get_viewport_rect().size.y * 0.5
+		for pi in range(_grow_btn_leaf_particles.size() - 1, -1, -1):
+			var p: Dictionary = _grow_btn_leaf_particles[pi]
+			p["age"] += delta
+			if p["age"] >= p["max_age"] or p["pos"].y >= mid_screen:
+				_grow_btn_leaf_particles.remove_at(pi)
+			else:
+				p["vel"].y += 240.0 * delta # gravity pulling down
+				p["vel"].x *= (1.0 - 1.2 * delta) # air drag
+				p["pos"] += p["vel"] * delta
+				p["pos"].x += sin(_hud_anim_time * 8.0 + p["wobble"]) * 14.0 * delta # gentle flutter
+				if p["pos"].y >= mid_screen:
+					_grow_btn_leaf_particles.remove_at(pi)
 		needs_redraw = true
 
 	var is_tr := false
@@ -439,17 +622,12 @@ func _process(delta: float) -> void:
 		_trigger_victory()
 		return
 
-	# Check Game Over conditions: air pollution reaches max or water reaches 0
+	# Check Game Over condition: air pollution reaches 100%
 	if _air_pollution >= MAX_AIR_POLLUTION:
+		_air_pollution = MAX_AIR_POLLUTION
 		_is_game_over = true
 		_is_game_won = false
 		_game_over_reason = "HAVA KİRLİLİĞİ %100'E ULAŞTI" if is_tr else "AIR POLLUTION REACHED 100%"
-		needs_redraw = true
-	elif _water_stored <= 0.0:
-		_water_stored = 0.0
-		_is_game_over = true
-		_is_game_won = false
-		_game_over_reason = "SU TÜKENDİ (0L)" if is_tr else "WATER DEPLETED (0L)"
 		needs_redraw = true
 
 	if _update_tree_transitions(delta):
@@ -463,8 +641,11 @@ func _process(delta: float) -> void:
 
 
 func _get_target_leaf_rect() -> Rect2:
-	# When tree health is <= 20, leaves are dry; beyond 20, sprites are green leaves scaled by health
-	if _tree_health <= 20.0:
+	# From health 0 to 10: only small trunk, no leaves (empty Rect2)
+	# Health 10 to 20: dry leaves; beyond 20: green leaves scaled by health
+	if _tree_health <= 10.0:
+		return Rect2()
+	elif _tree_health <= 20.0:
 		return SPRITE_RECT_DRYLEAVES
 	elif _tree_health < 50.0:
 		return SPRITE_RECT_SMALLLEAVES
@@ -481,9 +662,32 @@ func _grow_tree_to_next_state() -> void:
 	if _water_stored <= 50.0:
 		return
 
+	_water_ghost_stored = maxf(_water_ghost_stored, _water_stored)
+	_water_ghost_hold = 0.18
 	_water_stored -= 50.0
 
-	if _tree_health <= 20.0:
+	# Trigger spring animation & spawn burst of tiny falling leaves from button center
+	_grow_btn_spring_time = 0.45
+	var size := get_viewport_rect().size
+	var mid := size.y * 0.5
+	var b_rect := _get_grow_button_rect(size, mid)
+	var btn_center := b_rect.position + b_rect.size * 0.5
+	for k in 14:
+		var angle := _wind_rng.randf_range(-PI * 0.95, -PI * 0.05) # pop upward and outwards
+		var spd := _wind_rng.randf_range(80.0, 190.0)
+		_grow_btn_leaf_particles.append({
+			"pos": btn_center + Vector2(_wind_rng.randf_range(-12.0, 12.0), _wind_rng.randf_range(-12.0, 12.0)),
+			"vel": Vector2(cos(angle) * spd, sin(angle) * spd),
+			"size": _wind_rng.randf_range(2.5, 5.0),
+			"color": Color("7cb342") if _wind_rng.randf() < 0.5 else Color("558b2f"),
+			"wobble": _wind_rng.randf_range(0.0, TAU),
+			"age": 0.0,
+			"max_age": _wind_rng.randf_range(0.85, 1.45)
+		})
+
+	if _tree_health <= 10.0:
+		_tree_health = 25.0
+	elif _tree_health <= 20.0:
 		_tree_health = 35.0
 	elif _tree_health < 50.0:
 		_tree_health = 65.0
@@ -502,7 +706,9 @@ func _get_grow_button_rect(size: Vector2, mid: float) -> Rect2:
 
 func _restart_game() -> void:
 	_water_stored = INITIAL_WATER
-	_tree_health = 25.0
+	_water_ghost_stored = INITIAL_WATER
+	_water_ghost_hold = 0.0
+	_tree_health = 5.0
 	_air_pollution = 35.0
 	_is_game_over = false
 	_is_game_won = false
@@ -530,6 +736,9 @@ func _restart_game() -> void:
 	_has_last_drag_cell = false
 	_active_drag_Safe_tiles.clear()
 	_active_drag_history.clear()
+	_water_bar_bubbles.clear()
+	_pollution_flash_time = 0.0
+	_pollution_rising_tint = 0.0
 	_root_sfx_timer = 0.0
 	_stop_all_looping_sfx()
 	_generate_world()
@@ -552,7 +761,14 @@ func _update_heatwave(delta: float) -> bool:
 	var changed := false
 	_weather_cycle_timer -= delta
 	if _weather_cycle_timer <= 0.0:
-		_weather_state = (_weather_state + 1) % 3
+		# Cycle: Wind -> Heat Wave -> (Acid Rain only when air pollution > 50) -> Wind
+		match _weather_state:
+			WEATHER_WIND:
+				_weather_state = WEATHER_HEATWAVE
+			WEATHER_HEATWAVE:
+				_weather_state = WEATHER_ACID_RAIN if _air_pollution > 50.0 else WEATHER_WIND
+			_:
+				_weather_state = WEATHER_WIND
 		_weather_cycle_timer += _get_weather_duration(_weather_state)
 		_is_heatwave = (_weather_state == WEATHER_HEATWAVE)
 		_is_acid_rain = (_weather_state == WEATHER_ACID_RAIN)
@@ -586,12 +802,11 @@ func _update_heatwave(delta: float) -> bool:
 	if _acid_rain_intensity > 0.01:
 		var size := get_viewport_rect().size
 		var mid := size.y * 0.5
+		_cloud_drift += CLOUD_DRIFT_SPEED * delta
 		for drop in _acid_rain_drops:
 			drop["y"] += drop["speed"] * delta
-			drop["x"] += drop["vx"] * delta
 			if drop["y"] >= mid:
-				drop["y"] = _wind_rng.randf_range(-40.0, 0.0)
-				drop["x"] = _wind_rng.randf_range(0.0, maxf(size.x, 400.0))
+				_respawn_rain_drop(drop, size, mid, false)
 		changed = true
 
 	return changed
@@ -627,16 +842,45 @@ func _init_acid_rain_drops() -> void:
 	_acid_rain_drops.clear()
 	var size := get_viewport_rect().size
 	var mid := maxf(size.y * 0.5, 200.0)
-	var width := maxf(size.x, 400.0)
 	for i in 48:
-		_acid_rain_drops.append({
-			"x": _wind_rng.randf_range(0.0, width),
-			"y": _wind_rng.randf_range(0.0, mid),
+		var drop := {
+			"x": 0.0,
+			"y": 0.0,
+			"cloud": 0,
+			"ox": 0.0,
 			"len": _wind_rng.randf_range(10.0, 20.0),
 			"speed": _wind_rng.randf_range(260.0, 380.0),
-			"vx": _wind_rng.randf_range(-18.0, -6.0),
 			"alpha": _wind_rng.randf_range(0.35, 0.7)
-		})
+		}
+		_respawn_rain_drop(drop, size, mid, true)
+		_acid_rain_drops.append(drop)
+
+
+func _get_cloud_width_px() -> float:
+	return float(CLOUD_SHAPE_A[0].length()) * TILE_SIZE
+
+
+func _get_cloud_left(idx: int, width: float) -> float:
+	# Clouds drift slowly to the right and wrap around the screen
+	var cw := _get_cloud_width_px()
+	var span := maxf(width, 400.0) + cw
+	return fposmod(CLOUD_FX[idx] * span + _cloud_drift, span) - cw
+
+
+func _get_cloud_bottom(idx: int, mid: float) -> float:
+	var shape: Array = CLOUD_SHAPE_A if idx % 2 == 0 else CLOUD_SHAPE_B
+	return CLOUD_TOP_FRAC[idx] * mid + float(shape.size()) * TILE_SIZE
+
+
+func _respawn_rain_drop(drop: Dictionary, size: Vector2, mid: float, scatter: bool) -> void:
+	# Rain always starts at the underside of one of the clouds
+	var idx := _wind_rng.randi_range(0, CLOUD_FX.size() - 1)
+	var cw := _get_cloud_width_px()
+	drop["cloud"] = idx
+	drop["ox"] = _wind_rng.randf_range(cw * 0.15, cw * 0.85)
+	var bottom := _get_cloud_bottom(idx, mid)
+	drop["y"] = _wind_rng.randf_range(bottom, mid) if scatter else bottom
+	drop["x"] = _get_cloud_left(idx, size.x) + drop["ox"]
 
 
 func _get_target_trunk_rect() -> Rect2:
@@ -699,8 +943,8 @@ func _update_leaf_particles(delta: float) -> bool:
 	var mid := size.y * 0.5
 	var changed := false
 
-	# Spawn flying leaves from canopy when wind is active
-	if _wind_strength > 0.12 and size.x > 10.0:
+	# Spawn flying leaves from canopy when wind is active (only if tree has leaves)
+	if _wind_strength > 0.12 and size.x > 10.0 and _tree_health > 10.0:
 		var spawn_rate := 1.5 + _wind_strength * 6.5
 		_leaf_spawn_timer += delta * spawn_rate
 		while _leaf_spawn_timer >= 1.0:
@@ -864,6 +1108,9 @@ func _toggle_pause() -> void:
 	_has_last_drag_cell = false
 	_active_drag_Safe_tiles.clear()
 	_active_drag_history.clear()
+	_water_bar_bubbles.clear()
+	_pollution_flash_time = 0.0
+	_pollution_rising_tint = 0.0
 	_root_sfx_timer = 0.0
 	_stop_all_looping_sfx()
 	_pause_hovered_btn_idx = 0
@@ -972,6 +1219,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:
 			_restart_game()
+		elif event.keycode == KEY_TAB:
+			# Temporary debug shortcut: immediately win and trigger victory outro cutscene
+			if not _is_game_over:
+				_game_timer = 0.0
+				_is_game_over = true
+				_is_game_won = true
+				_trigger_victory()
 		elif event.keycode == KEY_ESCAPE:
 			if not _is_game_over:
 				_toggle_pause()
@@ -1418,7 +1672,12 @@ func _draw() -> void:
 	if _acid_rain_intensity > 0.01:
 		# Overcast grayish tint over the top screen during acid rain (behind the tree)
 		draw_rect(Rect2(0.0, 0.0, size.x, mid), Color(0.32, 0.35, 0.37, 0.65 * _acid_rain_intensity))
+	# Air pollution atmospheric tint over the top screen: scales smoothly between 0% and 20% opacity as pollution reaches 100%
+	var poll_ratio := clampf(_air_pollution / MAX_AIR_POLLUTION, 0.0, 1.0)
+	if poll_ratio > 0.001:
+		draw_rect(Rect2(0.0, 0.0, size.x, mid), Color(0.85, 0.18, 0.18, 0.20 * poll_ratio))
 	_draw_wind_gusts(mid)
+	_draw_acid_clouds(size, mid)
 	_draw_acid_rain(size, mid)
 	_draw_tree(Vector2(size.x * 0.5, mid), mid)
 	_draw_leaf_particles(mid)
@@ -1472,14 +1731,37 @@ func _draw_pause_menu(size: Vector2, mid: float) -> void:
 		draw_string(_vt323_font, Vector2(r.position.x, text_y), labels[i], HORIZONTAL_ALIGNMENT_CENTER, r.size.x, 26, text_col)
 
 
-func _draw_acid_rain(_size: Vector2, mid: float) -> void:
+func _draw_acid_clouds(size: Vector2, mid: float) -> void:
+	if _acid_rain_intensity <= 0.02:
+		return
+	var a := clampf(_acid_rain_intensity, 0.0, 1.0)
+	for i in CLOUD_FX.size():
+		var shape: Array = CLOUD_SHAPE_A if i % 2 == 0 else CLOUD_SHAPE_B
+		var left := _get_cloud_left(i, size.x)
+		var top: float = CLOUD_TOP_FRAC[i] * mid
+		for row in shape.size():
+			var line: String = shape[row]
+			var col_color: Color = CLOUD_ROW_COLORS[mini(row, CLOUD_ROW_COLORS.size() - 1)]
+			col_color.a = a
+			var run_start := -1
+			for col in line.length() + 1:
+				var filled := col < line.length() and line[col] == "#"
+				if filled and run_start < 0:
+					run_start = col
+				elif not filled and run_start >= 0:
+					draw_rect(Rect2(left + float(run_start) * TILE_SIZE, top + float(row) * TILE_SIZE, float(col - run_start) * TILE_SIZE, TILE_SIZE), col_color)
+					run_start = -1
+
+
+func _draw_acid_rain(size: Vector2, mid: float) -> void:
 	if _acid_rain_intensity <= 0.02:
 		return
 	for drop in _acid_rain_drops:
 		var y: float = drop["y"]
 		if y >= mid or y + drop["len"] <= 0.0:
 			continue
-		var x: float = drop["x"]
+		var idx: int = drop["cloud"]
+		var x: float = _get_cloud_left(idx, size.x) + drop["ox"]
 		var len_y: float = drop["len"]
 		var p1 := Vector2(x, maxf(0.0, y))
 		var p2 := Vector2(x - 1.5, minf(mid, y + len_y))
@@ -1524,7 +1806,7 @@ func _draw_health_bar(_size: Vector2) -> void:
 	if not _vt323_font:
 		return
 
-	var bar_pos := Vector2(20.0, 26.0)
+	var bar_pos := Vector2(HUD_BAR_X, 26.0)
 	var bar_w := 200.0
 	var bar_h := 18.0
 	var border_w := 2.0
@@ -1535,9 +1817,9 @@ func _draw_health_bar(_size: Vector2) -> void:
 	if GameSettings:
 		is_tr = (GameSettings.language == GameSettings.Language.TR)
 
-	# Title text above the bar
+	# Title text above the bar (offset right of the top-left corner icon)
 	var tree_title := "AĞAÇ SAĞLIĞI" if is_tr else "TREE HEALTH"
-	draw_string(_vt323_font, bar_pos + Vector2(0.0, -6.0), tree_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	draw_string(_vt323_font, bar_pos + Vector2(12.0, -6.0), tree_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 	# Status text on the right (e.g. 75% or Absorbing / Drying)
 	var hp_ratio := clampf(_tree_health / MAX_TREE_HEALTH, 0.0, 1.0)
@@ -1560,20 +1842,49 @@ func _draw_health_bar(_size: Vector2) -> void:
 
 	var current_w := bar_w * hp_ratio
 	if current_w > 0.0:
-		# Main filled bar
-		draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h)), fill_color)
-		# Gloss highlight line on top half of the bar
-		draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h * 0.4)), Color(1.0, 1.0, 1.0, 0.25))
+		if _wood_log_texture:
+			var log_size := _wood_log_texture.get_size()
+			var src_rect := Rect2(0.0, 0.0, log_size.x * hp_ratio, log_size.y)
+			draw_texture_rect_region(_wood_log_texture, Rect2(bar_pos, Vector2(current_w, bar_h)), src_rect)
+			# Slight red/yellow/green health tint over the filled wood bar
+			draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h)), Color(fill_color.r, fill_color.g, fill_color.b, 0.35))
+		else:
+			# Main filled bar with organic wood/growth tone
+			draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h)), fill_color)
 
-	# Inner outline
-	draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+			# Organic wood-grain texture lines along the health bar
+			var grain_color := Color(fill_color.darkened(0.25), 0.55)
+			draw_line(Vector2(bar_pos.x, bar_pos.y + 5.0), Vector2(bar_pos.x + current_w, bar_pos.y + 5.0), grain_color, 1.0)
+			draw_line(Vector2(bar_pos.x, bar_pos.y + 12.0), Vector2(bar_pos.x + current_w, bar_pos.y + 12.0), grain_color, 1.0)
+
+			# Subtle organic wood knot pattern along the bar
+			var step_x := 18.0
+			var k_x := bar_pos.x + 12.0
+			while k_x < bar_pos.x + current_w - 4.0:
+				draw_rect(Rect2(k_x, bar_pos.y + 8.0, 3.0, 2.0), grain_color)
+				k_x += step_x
+
+			# Gloss highlight line on top half of the bar
+			draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h * 0.35)), Color(1.0, 1.0, 1.0, 0.22))
+
+	# Wood log borders around the health bar (same outer footprint as the other bars)
+	if _wood_log_texture:
+		var log_size := _wood_log_texture.get_size()
+		# Top and bottom wood log borders
+		draw_texture_rect(_wood_log_texture, Rect2(bar_pos.x - border_w, bar_pos.y - border_w, bar_w + border_w * 2.0, border_w), false)
+		draw_texture_rect(_wood_log_texture, Rect2(bar_pos.x - border_w, bar_pos.y + bar_h, bar_w + border_w * 2.0, border_w), false)
+		# Left and right wood log borders
+		draw_texture_rect_region(_wood_log_texture, Rect2(bar_pos.x - border_w, bar_pos.y, border_w, bar_h), Rect2(0.0, 0.0, minf(32.0, log_size.x), log_size.y))
+		draw_texture_rect_region(_wood_log_texture, Rect2(bar_pos.x + bar_w, bar_pos.y, border_w, bar_h), Rect2(maxf(0.0, log_size.x - 32.0), 0.0, minf(32.0, log_size.x), log_size.y))
+	else:
+		draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
 
 	# --- WATER BAR (right below the health bar) ---
-	var water_bar_pos := Vector2(20.0, 68.0)
+	var water_bar_pos := Vector2(HUD_BAR_X, 68.0)
 
-	# Title text above the water bar
+	# Title text above the water bar (offset right of the top-left corner icon)
 	var water_title := "SU" if is_tr else "WATER"
-	draw_string(_vt323_font, water_bar_pos + Vector2(0.0, -6.0), water_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	draw_string(_vt323_font, water_bar_pos + Vector2(12.0, -6.0), water_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 	# Water amount in Liters on the right (1px water source = 1L)
 	var water_str := "%dL" % int(roundf(_water_stored))
@@ -1586,20 +1897,46 @@ func _draw_health_bar(_size: Vector2) -> void:
 
 	var water_ratio := clampf(_water_stored / MAX_WATER_STORED, 0.0, 1.0)
 	var water_fill_w := bar_w * water_ratio
+	var ghost_ratio := clampf(_water_ghost_stored / MAX_WATER_STORED, 0.0, 1.0)
+	var ghost_fill_w := bar_w * ghost_ratio
+	if ghost_fill_w > water_fill_w + 0.5:
+		draw_rect(Rect2(water_bar_pos.x + water_fill_w, water_bar_pos.y, ghost_fill_w - water_fill_w, bar_h), Color(0.75, 0.90, 0.98, 0.55))
+		draw_rect(Rect2(water_bar_pos.x + water_fill_w, water_bar_pos.y, ghost_fill_w - water_fill_w, bar_h * 0.35), Color(1.0, 1.0, 1.0, 0.3))
 	if water_fill_w > 0.0:
 		var water_fill_color := WATER_COLOR.lerp(Color("5dade2"), water_ratio)
 		draw_rect(Rect2(water_bar_pos, Vector2(water_fill_w, bar_h)), water_fill_color)
-		draw_rect(Rect2(water_bar_pos, Vector2(water_fill_w, bar_h * 0.4)), Color(1.0, 1.0, 1.0, 0.25))
+
+		# Liquid undulating pixel wave on the surface layer
+		var wave_step := 3.0
+		var wx := 0.0
+		while wx < water_fill_w:
+			var wave_offset_y := sin((water_bar_pos.x + wx) * 0.15 + _hud_anim_time * 4.5) * 1.5
+			var seg_w := minf(wave_step, water_fill_w - wx)
+			draw_rect(Rect2(water_bar_pos.x + wx, water_bar_pos.y, seg_w, 2.0 + wave_offset_y), Color(1.0, 1.0, 1.0, 0.35))
+			wx += wave_step
+
+		# Gloss reflection band in top third
+		draw_rect(Rect2(water_bar_pos + Vector2(0.0, 2.0), Vector2(water_fill_w, bar_h * 0.3)), Color(1.0, 1.0, 1.0, 0.18))
+
+		# Rising bubbles when water is increasing
+		for b in _water_bar_bubbles:
+			var bx: float = water_bar_pos.x + b["rel_x"] * water_fill_w + sin(_water_pulse_time * 6.0 + b["wobble_phase"]) * 1.5
+			var by: float = water_bar_pos.y + b["y"]
+			var bsz: float = b["size"]
+			if bx >= water_bar_pos.x and bx + bsz <= water_bar_pos.x + water_fill_w and by >= water_bar_pos.y and by + bsz <= water_bar_pos.y + bar_h:
+				draw_rect(Rect2(bx, by, bsz, bsz), Color("dff5ff"))
 
 	# Inner outline
 	draw_rect(Rect2(water_bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
 
 	# --- AIR POLLUTION BAR (right below the water bar) ---
-	var poll_bar_pos := Vector2(20.0, 110.0)
+	var poll_bar_pos := Vector2(HUD_BAR_X, 110.0)
 
-	# Title text above the air pollution bar
+	# Title text above the air pollution bar (offset right of the top-left corner icon)
+	var is_poll_flashing := _air_pollution > 80.0
+	var flash_on := is_poll_flashing and (int(_pollution_flash_time * 7.0) % 2 == 1)
 	var poll_title := "HAVA KİRLİLİĞİ" if is_tr else "AIR POLLUTION"
-	draw_string(_vt323_font, poll_bar_pos + Vector2(0.0, -6.0), poll_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	draw_string(_vt323_font, poll_bar_pos + Vector2(12.0, -6.0), poll_title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
 	# Pollution percentage on the right
 	var poll_ratio := clampf(_air_pollution / MAX_AIR_POLLUTION, 0.0, 1.0)
@@ -1613,17 +1950,87 @@ func _draw_health_bar(_size: Vector2) -> void:
 
 	var poll_fill_w := bar_w * poll_ratio
 	if poll_fill_w > 0.0:
-		# Smog gray/purple shifting to hazard red as pollution approaches 100%
-		var poll_color: Color
-		if poll_ratio < 0.6:
-			poll_color = Color("7f8fa6").lerp(Color("c23616"), poll_ratio / 0.6 * 0.5)
-		else:
-			poll_color = Color("a05d43").lerp(Color("e84118"), (poll_ratio - 0.6) / 0.4)
-		draw_rect(Rect2(poll_bar_pos, Vector2(poll_fill_w, bar_h)), poll_color)
-		draw_rect(Rect2(poll_bar_pos, Vector2(poll_fill_w, bar_h * 0.4)), Color(1.0, 1.0, 1.0, 0.2))
+		# Fill the pollution bar directly with a continuous two-tone pixel-art smoke plume that rises upward
+		# (light smoke #d7d7d7 with swirling #b5b5b5 inner patches rising from bottom to top)
+		var px_size := 2.0
+		var rows := int(bar_h / px_size) # 9 pixel rows
+		var max_cols := int(ceil(poll_fill_w / px_size))
+		var base_light := Color("d7d7d7").lerp(Color("e6b8b8"), _pollution_rising_tint)
+		var base_shade := Color("b5b5b5").lerp(Color("c99393"), _pollution_rising_tint)
+		var smoke_light := Color("ff8a8a") if flash_on else base_light
+		var smoke_shade := Color("d93838") if flash_on else base_shade
+		var rise_shift := _hud_anim_time * 6.5
+		var right_shift := _hud_anim_time * 8.0
 
-	# Inner outline
-	draw_rect(Rect2(poll_bar_pos, Vector2(bar_w, bar_h)), Color(1.0, 1.0, 1.0, 0.2), false, 1.0)
+		for ry in rows:
+			var sy_f := float(ry) + rise_shift
+			# Shape the leading front edge at poll_fill_w with an upward-traveling billow wave
+			var base_taper := -absi(ry - 4) / 2
+			var upward_billow := int(roundf(sin(sy_f * 0.85) * 1.5 + cos(sy_f * 0.45 + 1.1) * 1.0))
+			var row_front_offset := clampi(base_taper + upward_billow - 1, -5, 0)
+			var row_end_col := maxi(1, max_cols + row_front_offset)
+
+			for rx in row_end_col:
+				var sx_f := float(rx) - right_shift + sin(sy_f * 0.55) * 1.2
+				# Subtle billowing puffs rising and drifting right along the top/bottom edges
+				if ry == 0:
+					var top_puff := sin((float(rx) - right_shift) * 0.65) + cos((float(rx) - right_shift) * 0.33 + 1.2)
+					if top_puff < -0.55:
+						continue
+				elif ry == rows - 1:
+					var bot_puff := cos((float(rx) - right_shift) * 0.60 + 0.8)
+					if bot_puff < -0.75:
+						continue
+
+				# Two-tone pixel-art smoke shading rising upward and moving right through the bar
+				var is_rim := (ry == 0) or (rx >= row_end_col - 2 and ry <= 5)
+				var swirl := sin(sy_f * 0.85 + sin(sx_f * 0.45) * 1.6) + cos(sx_f * 0.52 + sy_f * 0.55)
+				var is_shaded := (not is_rim) and (swirl > 0.12 or ry == rows - 1)
+				var col := smoke_shade if is_shaded else smoke_light
+
+				var draw_x := poll_bar_pos.x + float(rx) * px_size
+				var draw_w := minf(px_size, poll_bar_pos.x + bar_w - draw_x)
+				if draw_w > 0.0:
+					draw_rect(Rect2(draw_x, poll_bar_pos.y + float(ry) * px_size, draw_w, px_size), col)
+
+		# Small detached smoke wisps rising upward and drifting right near the billowing front edge
+		if max_cols >= 6 and poll_fill_w < bar_w - 6.0:
+			for wi in 2:
+				var cycle := fmod(_hud_anim_time * 4.5 + float(wi) * 3.5, 7.0)
+				var wisp_row := rows - 2 - int(cycle)
+				if wisp_row >= 0 and wisp_row <= rows - 2:
+					var wisp_col := max_cols - 4 + int(cycle * 0.6) + (wi % 2)
+					var wisp_x := poll_bar_pos.x + float(wisp_col) * px_size
+					var wisp_y := poll_bar_pos.y + float(wisp_row) * px_size
+					if wisp_x + px_size * 2.0 <= poll_bar_pos.x + bar_w:
+						draw_rect(Rect2(wisp_x, wisp_y, px_size * 2.0, px_size), smoke_light)
+						if wisp_row + 1 < rows:
+							draw_rect(Rect2(wisp_x + px_size, wisp_y + px_size, px_size, px_size), smoke_shade)
+
+	# Inner outline (alert border when flashing)
+	var poll_outline_col := Color("ff5252") if flash_on else Color(1.0, 1.0, 1.0, 0.2)
+	draw_rect(Rect2(poll_bar_pos, Vector2(bar_w, bar_h)), poll_outline_col, false, 1.5 if flash_on else 1.0)
+
+
+	# Icons perched on the top-left corner of each bar (matching the recovery bar layout)
+	_draw_hud_icon(HUD_ICON_HEART, HUD_ICON_HEART_COLORS, bar_pos)
+	_draw_hud_icon(HUD_ICON_DROP, HUD_ICON_DROP_COLORS, water_bar_pos)
+	_draw_hud_icon(HUD_ICON_SMOKE, HUD_ICON_SMOKE_COLORS, poll_bar_pos)
+
+
+func _draw_hud_icon(pattern: Array, colors: Dictionary, bar_top_left: Vector2) -> void:
+	# Draws a pixel-art icon perched on the top-left corner of the bar, matching the recovery bar sprout
+	var px := HUD_ICON_PIXEL
+	var h := float(pattern.size()) * px
+	var left := bar_top_left.x - 6.0
+	var top := bar_top_left.y - h + 2.0
+	for row in pattern.size():
+		var line: String = pattern[row]
+		for col in line.length():
+			var ch := line[col]
+			if ch == ".":
+				continue
+			draw_rect(Rect2(left + float(col) * px, top + float(row) * px, px, px), colors[ch])
 
 
 func _draw_grow_button(size: Vector2, mid: float) -> void:
@@ -1631,6 +2038,66 @@ func _draw_grow_button(size: Vector2, mid: float) -> void:
 		return
 
 	var btn_rect := _get_grow_button_rect(size, mid)
+	var can_grow := _water_stored > 50.0
+
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
+	# Calculate spring bounce scale when pressed:
+	# dampens smoothly from a squash to stretch and settles back to 1.0
+	var spring_scale := 1.0
+	if _grow_btn_spring_time > 0.0:
+		var progress := 1.0 - (_grow_btn_spring_time / 0.45) # 0.0 -> 1.0
+		var damp := exp(-progress * 4.5)
+		spring_scale = 1.0 - sin(progress * TAU * 2.0) * 0.28 * damp
+
+	var current_scale := _grow_btn_hover_scale * spring_scale
+	var btn_center := btn_rect.position + btn_rect.size * 0.5
+
+	if _leaf_btn_texture:
+		var src_rect := Rect2(125.0, 78.0, 252.0, 362.0) # tight leaf bounding box
+		var leaf_aspect := src_rect.size.x / src_rect.size.y # ~0.696
+		# Fit the leaf inside btn_rect maintaining aspect ratio and applied scale
+		var base_leaf_h := btn_rect.size.y
+		var leaf_h := base_leaf_h * current_scale
+		var leaf_w := leaf_h * leaf_aspect
+		var leaf_pos := Vector2(btn_center.x - leaf_w * 0.5, btn_center.y - leaf_h * 0.5)
+		var leaf_rect := Rect2(leaf_pos, Vector2(leaf_w, leaf_h))
+
+		# Drop shadow
+		draw_texture_rect_region(_leaf_btn_texture, Rect2(leaf_pos + Vector2(2.0, 3.0), Vector2(leaf_w, leaf_h)), src_rect, Color(0.0, 0.0, 0.0, 0.65))
+
+		# Modulate tint: vibrant green when ready, slightly brightened when hovered, darkened gray when not ready
+		var leaf_mod: Color
+		if not can_grow:
+			leaf_mod = Color(0.45, 0.45, 0.45, 0.65)
+		elif _is_grow_btn_hovered:
+			leaf_mod = Color(1.2, 1.2, 1.2, 1.0)
+		else:
+			leaf_mod = Color(1.0, 1.0, 1.0, 1.0)
+		draw_texture_rect_region(_leaf_btn_texture, leaf_rect, src_rect, leaf_mod)
+
+		# Text overlay on the leaf button (centered around btn_center)
+		var text_col := Color.WHITE if can_grow else Color(0.75, 0.75, 0.75, 0.85)
+		var shadow_col := Color(0.0, 0.0, 0.0, 0.85)
+		var grow_l1 := "AĞACI" if is_tr else "GROW"
+		var grow_l2 := "BÜYÜT" if is_tr else "TREE"
+		# Text with shadow for legibility over the leaf
+		draw_string(_vt323_font, btn_center + Vector2(-btn_rect.size.x * 0.5 + 1.0, -12.0), grow_l1, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, shadow_col)
+		draw_string(_vt323_font, btn_center + Vector2(-btn_rect.size.x * 0.5, -13.0), grow_l1, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
+
+		draw_string(_vt323_font, btn_center + Vector2(-btn_rect.size.x * 0.5 + 1.0, 10.0), grow_l2, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, shadow_col)
+		draw_string(_vt323_font, btn_center + Vector2(-btn_rect.size.x * 0.5, 9.0), grow_l2, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
+
+		var cost_col := Color("bfe3f5") if can_grow else text_col
+		draw_string(_vt323_font, btn_center + Vector2(-btn_rect.size.x * 0.5 + 1.0, 31.0), "(50L)", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 18, shadow_col)
+		draw_string(_vt323_font, btn_center + Vector2(-btn_rect.size.x * 0.5, 30.0), "(50L)", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 18, cost_col)
+
+		# Draw falling tiny leaf particles from pressing
+		_draw_grow_leaf_particles(mid)
+		return
+
 	var border_w := 2.0
 
 	# Drop shadow / outer border
@@ -1639,7 +2106,6 @@ func _draw_grow_button(size: Vector2, mid: float) -> void:
 		Color(0.0, 0.0, 0.0, 0.75)
 	)
 
-	var can_grow := _water_stored > 50.0
 	var bg_col: Color
 	if not can_grow:
 		bg_col = Color("4a4a4a")
@@ -1651,11 +2117,6 @@ func _draw_grow_button(size: Vector2, mid: float) -> void:
 	# Inner border
 	draw_rect(btn_rect, Color(1.0, 1.0, 1.0, 0.35), false, 1.0)
 
-	# Centered label "GROW" / "TREE" / "(50L)"
-	var is_tr := false
-	if GameSettings:
-		is_tr = (GameSettings.language == GameSettings.Language.TR)
-
 	var text_col := Color.WHITE if can_grow else Color(0.7, 0.7, 0.7, 0.85)
 	var grow_l1 := "AĞACI" if is_tr else "GROW"
 	var grow_l2 := "BÜYÜT" if is_tr else "TREE"
@@ -1663,32 +2124,168 @@ func _draw_grow_button(size: Vector2, mid: float) -> void:
 	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 50.0), grow_l2, HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 22, text_col)
 	draw_string(_vt323_font, btn_rect.position + Vector2(0.0, 72.0), "(50L)", HORIZONTAL_ALIGNMENT_CENTER, btn_rect.size.x, 18, Color("bfe3f5") if can_grow else text_col)
 
+	_draw_grow_leaf_particles(mid)
+
+
+func _draw_grow_leaf_particles(mid: float) -> void:
+	for p in _grow_btn_leaf_particles:
+		var pos: Vector2 = p["pos"]
+		if pos.y >= mid:
+			continue
+		var progress: float = p["age"] / p["max_age"]
+		var fade := clampf((1.0 - progress) / 0.3, 0.0, 1.0)
+		var col: Color = p["color"]
+		col.a = fade
+		var sz: float = p["size"]
+		# Draw cute 2x2 / 3x3 pixel leaf flake with darker outline pixel
+		draw_rect(Rect2(pos.x, pos.y, sz, sz), col)
+		draw_rect(Rect2(pos.x + 1.0, pos.y - 1.0, sz * 0.5, sz * 0.5), Color("33691e", fade))
+
 
 func _draw_countdown_timer(size: Vector2) -> void:
 	if not _vt323_font:
 		return
 
-	var total_sec := int(ceilf(_game_timer))
-	var mins := total_sec / 60
-	var secs := total_sec % 60
-	var time_str := "%d:%02d" % [mins, secs]
-
-	var font_size := 36
-	var box_w := 96.0
-	var box_h := 36.0
+	var bar_w := 240.0
+	var bar_h := 18.0
 	var border_w := 2.0
-	var box_pos := Vector2((size.x - box_w) * 0.5, 16.0)
+	var bar_pos := Vector2(size.x - bar_w - 20.0, 26.0)
+	var font_size := 22
+
+	var is_tr := false
+	if GameSettings:
+		is_tr = (GameSettings.language == GameSettings.Language.TR)
+
+	# Progress from 0% to 100% over 60 seconds (GAME_DURATION)
+	var recover_ratio := clampf((GAME_DURATION - _game_timer) / GAME_DURATION, 0.0, 1.0)
+	var pct_str := "%d%%" % int(roundf(recover_ratio * 100.0))
 
 	# Outer border/drop shadow
-	draw_rect(Rect2(box_pos - Vector2(border_w, border_w), Vector2(box_w + border_w * 2.0, box_h + border_w * 2.0)), Color(0, 0, 0, 0.7))
-	# Dark background
-	draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(0.12, 0.12, 0.12, 0.85))
-	# Inner outline
-	draw_rect(Rect2(box_pos, Vector2(box_w, box_h)), Color(1.0, 1.0, 1.0, 0.25), false, 1.0)
+	draw_rect(Rect2(bar_pos - Vector2(border_w, border_w), Vector2(bar_w + border_w * 2.0, bar_h + border_w * 2.0)), Color("2a3b1c"))
+	# Inner dark background
+	draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), Color(0.12, 0.12, 0.12, 0.85))
 
-	# Centered timer text
-	var text_col := Color.WHITE if total_sec > 10 else Color("ff5252")
-	draw_string(_vt323_font, box_pos + Vector2(0.0, 27.0), time_str, HORIZONTAL_ALIGNMENT_CENTER, box_w, font_size, text_col)
+	var fill_w := bar_w * recover_ratio
+
+	# Back half of the spiral ivy vine (curves behind the bar where sin(theta) < 0)
+	_draw_recovery_spiral_ivy(bar_pos, bar_w, bar_h, recover_ratio, false)
+
+	if fill_w > 0.0:
+		if _recovery_fill_texture:
+			var rec_size := _recovery_fill_texture.get_size()
+			# Fit the full image height into the bar's height maintaining true aspect ratio, tiling horizontally as needed
+			var tile_scale := bar_h / rec_size.y
+			var tile_w := rec_size.x * tile_scale
+			var drawn_w := 0.0
+			while drawn_w < fill_w:
+				var piece_w := minf(tile_w, fill_w - drawn_w)
+				var src_piece_w := (piece_w / tile_w) * rec_size.x
+				var dst_rect := Rect2(bar_pos.x + drawn_w, bar_pos.y, piece_w, bar_h)
+				var src_rect := Rect2(0.0, 0.0, src_piece_w, rec_size.y)
+				draw_texture_rect_region(_recovery_fill_texture, dst_rect, src_rect)
+				drawn_w += piece_w
+		else:
+			var fill_col := Color("3e6537").lerp(Color("55824b"), recover_ratio)
+			draw_rect(Rect2(bar_pos, Vector2(fill_w, bar_h)), fill_col)
+			# Top highlight
+			draw_rect(Rect2(bar_pos, Vector2(fill_w, bar_h * 0.3)), Color(1.0, 1.0, 1.0, 0.16))
+
+	# Inner outline
+	draw_rect(Rect2(bar_pos, Vector2(bar_w, bar_h)), Color("2a3b1c"), false, 1.5)
+
+	# Front half of the spiral ivy vine (wraps across the front of the bar where sin(theta) >= 0)
+	_draw_recovery_spiral_ivy(bar_pos, bar_w, bar_h, recover_ratio, true)
+
+	# Pixel-art double-leaf sprout perched on the top-left corner of the recovery bar
+	var sprout_px := 1.5
+	var sprout_origin := Vector2(bar_pos.x - 4.0, bar_pos.y - float(RECOVERY_SPROUT_LEAVES.size()) * sprout_px + 2.0)
+	for row in RECOVERY_SPROUT_LEAVES.size():
+		var line: String = RECOVERY_SPROUT_LEAVES[row]
+		for col in line.length():
+			var ch := line[col]
+			if ch == ".":
+				continue
+			draw_rect(Rect2(sprout_origin.x + float(col) * sprout_px, sprout_origin.y + float(row) * sprout_px, sprout_px, sprout_px), RECOVERY_SPROUT_COLORS[ch])
+
+	# Title and percentage text above the bar (offset right of the top-left leaves)
+	var title := "DOĞANIN İYİLEŞMESİ" if is_tr else "NATURE RECOVERY"
+	draw_string(_vt323_font, bar_pos + Vector2(22.0, -6.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+	draw_string(_vt323_font, bar_pos + Vector2(bar_w - 46.0, -6.0), pct_str, HORIZONTAL_ALIGNMENT_RIGHT, 46.0, font_size, Color("c8e6c9"))
+
+
+func _draw_recovery_spiral_ivy(bar_pos: Vector2, bar_w: float, bar_h: float, recover_ratio: float, front_pass: bool) -> void:
+	if recover_ratio <= 0.005:
+		return
+
+	var px := 2.0 # Constant size of 1 small pixel square
+	var total_cols := int(bar_w / px)
+	var max_col := int(roundf(float(total_cols) * recover_ratio))
+	if max_col <= 0:
+		return
+
+	var turns := 4.5 # Number of spiral loops along the full bar
+	var amp_rows := 5.0
+	var center_row := int(roundf((bar_h * 0.5) / px))
+	var outline_col := Color("2a3b1c")
+	var stem_col := Color("476e3f") if front_pass else Color("33522c")
+	var leaf_fill := Color("59874f") if front_pass else Color("3d6135")
+
+	# Pixel grid: Vector2i(col, row) -> Color (every pixel is drawn as exactly 1 small px x px square)
+	var grid: Dictionary = {}
+
+	var prev_row := 0
+	var has_prev := false
+	for col in max_col:
+		var theta := (float(col) / float(total_cols)) * turns * TAU
+		var is_front := sin(theta) >= 0.0
+		var row := center_row - int(roundf(cos(theta) * amp_rows))
+		if is_front == front_pass:
+			if has_prev and absi(row - prev_row) > 1:
+				var step_r := 1 if row > prev_row else -1
+				var r := prev_row + step_r
+				while r != row:
+					grid[Vector2i(col, r)] = stem_col
+					grid[Vector2i(col, r - 1)] = outline_col
+					grid[Vector2i(col, r + 1)] = outline_col
+					r += step_r
+			grid[Vector2i(col, row)] = stem_col
+			if not grid.has(Vector2i(col, row - 1)):
+				grid[Vector2i(col, row - 1)] = outline_col
+			if not grid.has(Vector2i(col, row + 1)):
+				grid[Vector2i(col, row + 1)] = outline_col
+			has_prev = true
+			prev_row = row
+		else:
+			has_prev = false
+
+	# Small pixel-art ivy leaves along the spiral vine (also strictly 1x1 grid squares)
+	var leaf_step := 7
+	var lc := 5
+	var leaf_idx := 0
+	while lc < max_col - 1:
+		var theta := (float(lc) / float(total_cols)) * turns * TAU
+		var is_front := sin(theta) >= 0.0
+		if is_front == front_pass:
+			var base_r := center_row - int(roundf(cos(theta) * amp_rows))
+			var dir_r := -1 if (leaf_idx % 2 == 0) else 1
+			var lr := base_r + dir_r * 2
+			var leaf_cells := [
+				Vector2i(lc, lr),
+				Vector2i(lc + 1, lr),
+				Vector2i(lc + 1, lr + dir_r),
+			]
+			for cell in leaf_cells:
+				grid[cell] = leaf_fill
+				for off in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+					var nb: Vector2i = cell + off
+					if not grid.has(nb):
+						grid[nb] = outline_col
+		lc += leaf_step
+		leaf_idx += 1
+
+	for cell in grid.keys():
+		var c: Vector2i = cell
+		draw_rect(Rect2(bar_pos.x + float(c.x) * px, bar_pos.y + float(c.y) * px, px, px), grid[c])
 
 
 func _draw_game_over_overlay(size: Vector2) -> void:
@@ -1812,18 +2409,19 @@ func _draw_tree_spritesheet(base: Vector2, _mid: float) -> void:
 
 	# Draw leaves on top with smooth cross-dissolve and interpolated vertical offset
 	var leaf_t := smoothstep(0.0, 1.0, _leaf_dissolve_t)
-	if leaf_t < 1.0:
+	if leaf_t < 1.0 and _prev_leaf_rect.size.x > 0.0:
 		var prev_offset_y := _prev_leaf_offset_px * tree_pixel_scale
 		var prev_leaf_dest := Rect2(dest_pos + Vector2(leaf_offset_x, -prev_offset_y), scaled_size)
 		draw_texture_rect_region(_tree_texture, prev_leaf_dest, _prev_leaf_rect, Color(1.0, 1.0, 1.0, 1.0 - leaf_t))
 		if flash_alpha > 0.001 and _tree_white_texture:
 			draw_texture_rect_region(_tree_white_texture, prev_leaf_dest, _prev_leaf_rect, Color(flash_col.r, flash_col.g, flash_col.b, (1.0 - leaf_t) * flash_alpha))
 
-	var cur_offset_y := _current_leaf_offset_px * tree_pixel_scale
-	var cur_leaf_dest := Rect2(dest_pos + Vector2(leaf_offset_x, -cur_offset_y), scaled_size)
-	draw_texture_rect_region(_tree_texture, cur_leaf_dest, _current_leaf_rect, Color(1.0, 1.0, 1.0, leaf_t))
-	if flash_alpha > 0.001 and _tree_white_texture:
-		draw_texture_rect_region(_tree_white_texture, cur_leaf_dest, _current_leaf_rect, Color(flash_col.r, flash_col.g, flash_col.b, leaf_t * flash_alpha))
+	if _current_leaf_rect.size.x > 0.0:
+		var cur_offset_y := _current_leaf_offset_px * tree_pixel_scale
+		var cur_leaf_dest := Rect2(dest_pos + Vector2(leaf_offset_x, -cur_offset_y), scaled_size)
+		draw_texture_rect_region(_tree_texture, cur_leaf_dest, _current_leaf_rect, Color(1.0, 1.0, 1.0, leaf_t))
+		if flash_alpha > 0.001 and _tree_white_texture:
+			draw_texture_rect_region(_tree_white_texture, cur_leaf_dest, _current_leaf_rect, Color(flash_col.r, flash_col.g, flash_col.b, leaf_t * flash_alpha))
 
 
 func _draw_tree_procedural(base: Vector2, mid: float) -> void:
