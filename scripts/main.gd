@@ -1465,31 +1465,7 @@ func _update_water_flow_path() -> void:
 	if not _is_connected_to_water:
 		return
 
-	# 1. Aktif (henüz tükenmemiş) suya doğrudan dokunan temas kök hücrelerini topla
-	var contact_cells: Array[Vector2i] = []
-	for bank in _water_banks:
-		var rect: Rect2i = bank["rect"]
-		var drained: int = bank["drained_layers"]
-		var water_min_y := rect.position.y + drained
-		var water_max_y := rect.position.y + rect.size.y - 1
-		var water_min_x := rect.position.x
-		var water_max_x := rect.position.x + rect.size.x - 1
-		if water_min_y > water_max_y:
-			continue
-
-		for y in range(water_min_y - 1, water_max_y + 2):
-			for x in range(water_min_x - 1, water_max_x + 2):
-				if x >= water_min_x and x <= water_max_x and y >= water_min_y and y <= water_max_y:
-					continue
-				var c := Vector2i(x, y)
-				if _initial_root_tiles.has(c) or _root_tiles.has(c):
-					if not contact_cells.has(c):
-						contact_cells.append(c)
-
-	if contact_cells.is_empty():
-		return
-
-	# 2. Ağaç tabanından (satır 0) tüm bağlı köklere kesintisiz BFS yol haritası kur
+	# 1. Ağaç tabanından (satır 0) tüm bağlı köklere kesintisiz BFS yol haritası kur
 	var size := get_viewport_rect().size
 	var cols := int(ceil(size.x / TILE_SIZE))
 	var center_col := int(cols * 0.5)
@@ -1529,10 +1505,42 @@ func _update_water_flow_path() -> void:
 				parent_map[n] = curr
 				queue.append(n)
 
-	# 3. Her aktif su temas noktasından satır 0'a kadar kesintisiz akış zincirini oluştur
-	for contact in contact_cells:
-		if not parent_map.has(contact):
+	# 2. Her aktif su kaynağından SADECE TEK BİR temas noktası seç (Kalınlığı 1 olan tek şerit akış için)
+	var contact_cells: Array[Vector2i] = []
+	for bank in _water_banks:
+		var rect: Rect2i = bank["rect"]
+		var drained: int = bank["drained_layers"]
+		var water_min_y := rect.position.y + drained
+		var water_max_y := rect.position.y + rect.size.y - 1
+		var water_min_x := rect.position.x
+		var water_max_x := rect.position.x + rect.size.x - 1
+		if water_min_y > water_max_y:
 			continue
+
+		var bank_contacts: Array[Vector2i] = []
+		for y in range(water_min_y - 1, water_max_y + 2):
+			for x in range(water_min_x - 1, water_max_x + 2):
+				if x >= water_min_x and x <= water_max_x and y >= water_min_y and y <= water_max_y:
+					continue
+				var c := Vector2i(x, y)
+				if (_initial_root_tiles.has(c) or _root_tiles.has(c)) and parent_map.has(c):
+					if not bank_contacts.has(c):
+						bank_contacts.append(c)
+
+		if bank_contacts.is_empty():
+			continue
+
+		# Suya temas eden hücreler arasından ağaca en yakın olan TEK BİR temas hücresini seç
+		var best_c := bank_contacts[0]
+		var min_d: int = dist_to_trunk[best_c]
+		for bc in bank_contacts:
+			if dist_to_trunk[bc] < min_d:
+				min_d = dist_to_trunk[bc]
+				best_c = bc
+		contact_cells.append(best_c)
+
+	# 3. Seçilen tek temas noktasından satır 0'a kadar tek şeritlik (kalınlığı 1) akış zincirini oluştur
+	for contact in contact_cells:
 		var curr := contact
 		var step_count := 0
 		while true:
