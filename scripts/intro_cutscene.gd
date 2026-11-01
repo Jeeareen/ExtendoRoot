@@ -43,7 +43,6 @@ var _wind_time: float = 0.0
 
 var _fire_particles: Array = []
 var _smoke_particles: Array = []
-var _ash_particles: Array = []
 var _burning_leaf_particles: Array = []
 
 
@@ -178,19 +177,6 @@ func _update_particles(delta: float, size: Vector2, mid: float) -> void:
 					"max_age": _rng.randf_range(0.8, 1.8)
 				})
 
-	# 3. Ash flakes drifting in the aftermath (12.0s+)
-	if _timer >= 12.0:
-		if _rng.randf() < 0.45:
-			_ash_particles.append({
-				"pos": Vector2(_rng.randf_range(-20.0, size.x + 20.0), -10.0),
-				"vel": Vector2(_rng.randf_range(-12.0, 12.0), _rng.randf_range(22.0, 48.0)),
-				"size": _rng.randf_range(1.5, 3.5),
-				"alpha": _rng.randf_range(0.35, 0.75),
-				"phase": _rng.randf_range(0.0, TAU),
-				"age": 0.0,
-				"max_age": _rng.randf_range(8.0, 15.0)
-			})
-
 		# Tiny smoking wisps from burnt tree stumps
 		var stumps := [size.x * 0.14, size.x * 0.28, size.x * 0.72, size.x * 0.86]
 		for sx in stumps:
@@ -229,15 +215,6 @@ func _update_particles(delta: float, size: Vector2, mid: float) -> void:
 			_burning_leaf_particles.remove_at(i)
 		else:
 			p["pos"] += p["vel"] * delta
-
-	for i in range(_ash_particles.size() - 1, -1, -1):
-		var p: Dictionary = _ash_particles[i]
-		p["age"] += delta
-		if p["age"] >= p["max_age"] or p["pos"].y > size.y + 10.0:
-			_ash_particles.remove_at(i)
-		else:
-			p["pos"].x += (p["vel"].x + sin(p["age"] * 2.2 + p["phase"]) * 14.0) * delta
-			p["pos"].y += p["vel"].y * delta
 
 
 func _draw() -> void:
@@ -347,33 +324,13 @@ func _draw_ground_and_soil(size: Vector2, mid: float) -> void:
 
 	draw_rect(Rect2(0, mid * 0.94, size.x, mid * 0.06), grass_col)
 
-	# Underground (below mid)
-	if _timer < 12.5:
-		draw_rect(Rect2(0, mid, size.x, size.y - mid), Color("22140b"))
-	else:
-		# In aftermath, preview the dark soil grid ready for roots
-		_draw_soil_preview(size, mid)
-		var cover_alpha := clampf(1.0 - (_timer - 12.5) / 2.5, 0.0, 1.0)
-		if cover_alpha > 0.0:
-			draw_rect(Rect2(0, mid, size.x, size.y - mid), Color(0.13, 0.08, 0.04, cover_alpha))
-
-
-func _draw_soil_preview(size: Vector2, mid: float) -> void:
-	var cols := int(ceil(size.x / TILE_SIZE))
+	# Underground (below mid): solid dark soil layers (no water)
 	var rows := int(ceil((size.y - mid) / TILE_SIZE))
 	for r in rows:
 		var y := mid + float(r) * TILE_SIZE
 		var t := float(r) / float(maxi(rows, 1))
 		var soil_row_col := Color("3a2417").lerp(Color("130904"), t)
 		draw_rect(Rect2(0, y, size.x, TILE_SIZE), soil_row_col)
-
-	# Draw subtle underground water reservoir preview
-	var water_rect1 := Rect2(size.x * 0.2, mid + 60.0, 110.0, 48.0)
-	var water_rect2 := Rect2(size.x * 0.65, mid + 90.0, 130.0, 56.0)
-	draw_rect(water_rect1, Color("2980b9"))
-	draw_rect(water_rect1, Color("1f5f8b"), false, 2.0)
-	draw_rect(water_rect2, Color("2980b9"))
-	draw_rect(water_rect2, Color("1f5f8b"), false, 2.0)
 
 
 func _draw_picnic_and_family(size: Vector2, mid: float) -> void:
@@ -439,33 +396,49 @@ func _draw_picnic_and_family(size: Vector2, mid: float) -> void:
 		# Burnt ash smudge
 		draw_rect(Rect2(blk_x, bbq_base_y - 2.0, blk_w, 4.0), Color("170f0a"))
 
-	# 3. Family Pixel Figures: Dad (by grill), Mom (on blanket), Child
-	# Walking away between 3.5s and 5.8s!
-	var walk_phase := _timer * 11.0
+	# 3. Family Pixel Figures: Dad, Mom, Child walking away together!
 	var is_walking := _timer >= 3.5
+	var walk_phase := _timer * 11.0
 
-	# Dad position: starts by grill at bbq_x - 14.0, then walks right
-	var dad_x := bbq_x - 14.0
-	if is_walking:
-		dad_x += (_timer - 3.5) * 80.0
+	var dad_x: float
+	var mom_x: float
+	var kid_x: float
 
-	# Mom position: starts on blanket at blk_x + 16.0, then walks right
-	var mom_x := blk_x + 16.0
-	if is_walking:
-		mom_x += (_timer - 3.5) * 72.0
+	if not is_walking:
+		dad_x = bbq_x - 12.0
+		mom_x = blk_x + 14.0
+		kid_x = blk_x + 28.0
+	else:
+		# Group up and walk together as a unified family at identical speed
+		var walk_time := _timer - 3.5
+		var group_center := (blk_x + 22.0) + walk_time * 78.0
+		var form_t := clampf(walk_time / 0.5, 0.0, 1.0)
+		var start_dad := bbq_x - 12.0
+		var start_mom := blk_x + 14.0
+		var start_kid := blk_x + 28.0
 
-	# Child position: starts at blk_x + 38.0, then runs ahead right
-	var kid_x := blk_x + 38.0
-	if is_walking:
-		kid_x += (_timer - 3.3) * 105.0
+		dad_x = lerpf(start_dad, group_center - 13.0, form_t) + (1.0 - form_t) * walk_time * 78.0
+		kid_x = lerpf(start_kid, group_center, form_t) + (1.0 - form_t) * walk_time * 78.0
+		mom_x = lerpf(start_mom, group_center + 13.0, form_t) + (1.0 - form_t) * walk_time * 78.0
 
-	# Draw family only while they are within screen bounds
-	if dad_x < size.x + 30.0:
-		_draw_person(Vector2(dad_x, mid), "dad", walk_phase, is_walking)
-	if mom_x < size.x + 30.0:
-		_draw_person(Vector2(mom_x, mid), "mom", walk_phase, is_walking)
-	if kid_x < size.x + 30.0:
-		_draw_person(Vector2(kid_x, mid), "kid", walk_phase * 1.3, is_walking)
+		if form_t >= 1.0:
+			dad_x = group_center - 13.0
+			kid_x = group_center
+			mom_x = group_center + 13.0
+
+	# Draw family while on screen
+	if dad_x < size.x + 30.0 or mom_x < size.x + 30.0 or kid_x < size.x + 30.0:
+		# When walking together, draw hand holding between parents and child
+		if is_walking and dad_x < size.x + 20.0 and kid_x < size.x + 20.0 and mom_x < size.x + 20.0:
+			draw_line(Vector2(dad_x + 3.0, mid - 10.0), Vector2(kid_x - 2.0, mid - 8.0), Color("ffcc80"), 2.0)
+			draw_line(Vector2(mom_x - 3.0, mid - 10.0), Vector2(kid_x + 2.0, mid - 8.0), Color("ffcc80"), 2.0)
+
+		if dad_x < size.x + 30.0:
+			_draw_person(Vector2(dad_x, mid), "dad", walk_phase, is_walking)
+		if kid_x < size.x + 30.0:
+			_draw_person(Vector2(kid_x, mid), "kid", walk_phase, is_walking)
+		if mom_x < size.x + 30.0:
+			_draw_person(Vector2(mom_x, mid), "mom", walk_phase, is_walking)
 
 
 func _draw_person(pos: Vector2, person_type: String, walk_phase: float, is_walking: bool) -> void:
@@ -677,13 +650,6 @@ func _draw_foreground_particles() -> void:
 		var col: Color = p["color"]
 		col.a *= (1.0 - progress)
 		draw_rect(Rect2(p["pos"].x, p["pos"].y, s, s), col)
-
-	# Ash particles
-	for p in _ash_particles:
-		var progress: float = p["age"] / p["max_age"]
-		var s: float = p["size"]
-		var a: float = p["alpha"] * (1.0 - progress * 0.6)
-		draw_rect(Rect2(p["pos"].x, p["pos"].y, s, s), Color(0.88, 0.88, 0.90, a))
 
 
 func _draw_narrative_text(size: Vector2) -> void:
