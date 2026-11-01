@@ -128,6 +128,7 @@ var _root_grow_player: AudioStreamPlayer = null
 var _wind_player: AudioStreamPlayer = null
 var _rain_player: AudioStreamPlayer = null
 var _rock_player: AudioStreamPlayer = null
+var _soundtrack_player: AudioStreamPlayer = null
 const ROOT_SFX_HOLD_TIME := 0.14
 var _root_sfx_timer: float = 0.0
 
@@ -364,6 +365,15 @@ func _ready() -> void:
 		_rock_player.stream = rock_stream
 		_rock_player.volume_db = 6.0
 		add_child(_rock_player)
+	if ResourceLoader.exists("res://assets/soundtrack.mp3"):
+		var soundtrack_stream := load("res://assets/soundtrack.mp3")
+		if soundtrack_stream is AudioStreamMP3:
+			soundtrack_stream.loop = true
+		_soundtrack_player = AudioStreamPlayer.new()
+		_soundtrack_player.stream = soundtrack_stream
+		_soundtrack_player.volume_db = linear_to_db(0.33)
+		add_child(_soundtrack_player)
+		_soundtrack_player.play()
 	_wind_rng.randomize()
 	get_viewport().size_changed.connect(_on_size_changed)
 	_generate_world()
@@ -380,11 +390,13 @@ func _on_intro_finished() -> void:
 	if _intro_cutscene:
 		_intro_cutscene.queue_free()
 		_intro_cutscene = null
+	if _soundtrack_player and not _soundtrack_player.playing:
+		_soundtrack_player.play()
 	queue_redraw()
 
 
 func _trigger_victory() -> void:
-	_stop_all_looping_sfx()
+	_stop_all_looping_sfx(false) # Keep soundtrack playing through victory cutscene
 	_is_lmb_down = false
 	var victory_script = load("res://scripts/victory_cutscene.gd")
 	if victory_script:
@@ -395,6 +407,8 @@ func _trigger_victory() -> void:
 
 
 func _on_victory_finished() -> void:
+	if _soundtrack_player and _soundtrack_player.playing:
+		_soundtrack_player.stop()
 	if _victory_cutscene:
 		_victory_cutscene.queue_free()
 		_victory_cutscene = null
@@ -403,13 +417,15 @@ func _on_victory_finished() -> void:
 		tree.change_scene_to_file("res://scenes/main_menu.tscn")
 
 
-func _stop_all_looping_sfx() -> void:
+func _stop_all_looping_sfx(stop_music: bool = true) -> void:
 	if _root_grow_player and _root_grow_player.playing:
 		_root_grow_player.stop()
 	if _wind_player and _wind_player.playing:
 		_wind_player.stop()
 	if _rain_player and _rain_player.playing:
 		_rain_player.stop()
+	if stop_music and _soundtrack_player and _soundtrack_player.playing:
+		_soundtrack_player.stop()
 
 
 func _process(delta: float) -> void:
@@ -741,6 +757,9 @@ func _restart_game() -> void:
 	_pollution_rising_tint = 0.0
 	_root_sfx_timer = 0.0
 	_stop_all_looping_sfx()
+	if _soundtrack_player:
+		_soundtrack_player.stop()
+		_soundtrack_player.play(0.0)
 	_generate_world()
 	queue_redraw()
 
@@ -1113,6 +1132,9 @@ func _toggle_pause() -> void:
 	_pollution_rising_tint = 0.0
 	_root_sfx_timer = 0.0
 	_stop_all_looping_sfx()
+	if not _is_paused and not _is_game_over:
+		if _soundtrack_player and not _soundtrack_player.playing:
+			_soundtrack_player.play()
 	_pause_hovered_btn_idx = 0
 	queue_redraw()
 
@@ -1846,8 +1868,6 @@ func _draw_health_bar(_size: Vector2) -> void:
 			var log_size := _wood_log_texture.get_size()
 			var src_rect := Rect2(0.0, 0.0, log_size.x * hp_ratio, log_size.y)
 			draw_texture_rect_region(_wood_log_texture, Rect2(bar_pos, Vector2(current_w, bar_h)), src_rect)
-			# Slight red/yellow/green health tint over the filled wood bar
-			draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h)), Color(fill_color.r, fill_color.g, fill_color.b, 0.35))
 		else:
 			# Main filled bar with organic wood/growth tone
 			draw_rect(Rect2(bar_pos, Vector2(current_w, bar_h)), fill_color)
