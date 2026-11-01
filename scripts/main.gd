@@ -1447,17 +1447,17 @@ func _draw_pixel_art_root(cell: Vector2i, pos: Vector2, soil_col: Color) -> void
 	if neighbor_count <= 1 and depth > 0:
 		draw_rect(Rect2(px + 3.0, py + 3.0, 2.0, 2.0), ROOT_TIP_COLOR)
 
-	# 7. Animated Water Absorption Stream (Aşağıdan yukarıya, sudan ağaç tabanına KESİNTİSİZ akış)
+	# 7. Animated Water Absorption Pulse (Aşağıdan yukarıya, 5 piksel akış + yarım saniye duraksama)
 	if _is_connected_to_water and _water_flow_cells.has(cell):
 		var dist: int = _water_flow_cells[cell]
-		# 1. Kök boyunca kesintisiz akan canlı su damarı (Asla kesilmez)
-		draw_rect(Rect2(px + 2.0, py + 2.0, 4.0, 4.0), Color("29b6f6"))
-		# 2. Suyun temas noktasından ağaç tabanına doğru sürekli hızla tırmanan parlak su akıntı dalgaları
-		var ripple: float = fmod(_water_pulse_time * 9.0 - float(dist) * 0.9, 3.0)
-		if ripple >= 0.0 and ripple < 1.4:
-			draw_rect(Rect2(px + 2.5, py + 2.5, 3.0, 3.0), Color.WHITE)
-		else:
-			draw_rect(Rect2(px + 3.0, py + 3.0, 2.0, 2.0), Color("80d8ff"))
+		# 10 hücrelik döngü (hız=10): 5 hücrelik su akışı (0.5 sn) ardından 5 hücrelik duraksama (0.5 sn)
+		var wave: float = fmod(_water_pulse_time * 10.0 - float(dist), 10.0)
+		if wave >= 0.0 and wave < 5.0:
+			# 5 piksel boyunca ilerleyen mavi su akışı
+			draw_rect(Rect2(px + 2.0, py + 2.0, 4.0, 4.0), ROOT_WATER_FLOW)
+			# Dalganın öncü parlak su damlası
+			if wave < 1.6:
+				draw_rect(Rect2(px + 2.5, py + 2.5, 3.0, 3.0), Color.WHITE)
 
 
 func _update_water_flow_path() -> void:
