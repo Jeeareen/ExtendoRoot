@@ -102,20 +102,20 @@ func _process(delta: float) -> void:
 
 
 func _update_particles(delta: float, size: Vector2, mid: float) -> void:
-	var bbq_x := size.x * 0.58 + 10.0
+	var bbq_x := size.x * 0.58 + 12.0
 	var spark_land_x := size.x * 0.58 + 26.0
 
 	# 1. Gentle white smoke from BBQ grill (0.0s - 6.2s)
 	if _timer < 6.2:
 		if _rng.randf() < delta * 4.5:
 			_smoke_particles.append({
-				"pos": Vector2(bbq_x + _rng.randf_range(-3.0, 3.0), mid - 20.0),
+				"pos": Vector2(bbq_x + _rng.randf_range(-4.0, 4.0), mid - 29.0),
 				"vel": Vector2(_rng.randf_range(-4.0, 8.0), _rng.randf_range(-22.0, -36.0)),
-				"radius": _rng.randf_range(3.0, 5.0),
-				"max_radius": _rng.randf_range(10.0, 16.0),
+				"radius": _rng.randf_range(4.0, 6.5),
+				"max_radius": _rng.randf_range(14.0, 22.0),
 				"color": Color(0.92, 0.94, 0.96, 0.45),
 				"age": 0.0,
-				"max_age": _rng.randf_range(2.0, 3.0)
+				"max_age": _rng.randf_range(2.0, 3.2)
 			})
 
 	# 2. Fire, sparks & billowing smoke during wildfire (7.0s - 13.0s)
@@ -335,156 +335,188 @@ func _draw_ground_and_soil(size: Vector2, mid: float) -> void:
 
 func _draw_picnic_and_family(size: Vector2, mid: float) -> void:
 	var picnic_base_x := size.x * 0.58
-	var bbq_x := picnic_base_x + 10.0
+	var bbq_x := picnic_base_x + 12.0
 	var bbq_base_y := mid
 
-	# 1. Barbecue Kettle Grill (STAYS IN PLACE even after family leaves!)
+	# 1. Barbecue Kettle Grill (enlarged, sturdy retro grill)
 	# Ground shadow
-	draw_line(Vector2(bbq_x - 8.0, bbq_base_y), Vector2(bbq_x + 8.0, bbq_base_y), Color(0.0, 0.0, 0.0, 0.35), 2.0)
+	draw_line(Vector2(bbq_x - 14.0, bbq_base_y), Vector2(bbq_x + 14.0, bbq_base_y), Color(0.0, 0.0, 0.0, 0.4), 3.0)
 	# Grill tripod legs
 	var leg_col := Color("141414")
-	draw_line(Vector2(bbq_x - 7.0, bbq_base_y), Vector2(bbq_x - 3.0, bbq_base_y - 12.0), leg_col, 2.0)
-	draw_line(Vector2(bbq_x + 7.0, bbq_base_y), Vector2(bbq_x + 3.0, bbq_base_y - 12.0), leg_col, 2.0)
-	draw_line(Vector2(bbq_x, bbq_base_y), Vector2(bbq_x, bbq_base_y - 12.0), leg_col, 2.0)
+	draw_line(Vector2(bbq_x - 12.0, bbq_base_y), Vector2(bbq_x - 5.0, bbq_base_y - 14.0), leg_col, 3.0)
+	draw_line(Vector2(bbq_x + 12.0, bbq_base_y), Vector2(bbq_x + 5.0, bbq_base_y - 14.0), leg_col, 3.0)
+	draw_line(Vector2(bbq_x, bbq_base_y), Vector2(bbq_x, bbq_base_y - 14.0), leg_col, 3.0)
 
 	# Kettle bowl
-	var bowl_rect := Rect2(bbq_x - 8.0, bbq_base_y - 20.0, 16.0, 10.0)
+	var bowl_rect := Rect2(bbq_x - 14.0, bbq_base_y - 28.0, 28.0, 16.0)
 	draw_rect(bowl_rect, Color("222222"))
-	draw_rect(Rect2(bbq_x - 9.0, bbq_base_y - 21.0, 18.0, 3.0), Color("333333"))
+	draw_rect(Rect2(bbq_x - 16.0, bbq_base_y - 30.0, 32.0, 4.0), Color("333333"))
 
 	# Glowing hot coals inside
 	var coal_glow := (sin(_timer * 6.0) + 1.0) * 0.5
 	var coal_col := Color("ff5722").lerp(Color("ffeb3b"), coal_glow * 0.6)
-	draw_rect(Rect2(bbq_x - 6.0, bbq_base_y - 19.0, 12.0, 4.0), coal_col)
+	draw_rect(Rect2(bbq_x - 10.0, bbq_base_y - 27.0, 20.0, 6.0), coal_col)
 
 	# Careless Spark flying out from unattended grill (6.2s to 7.0s)
 	if _timer >= 6.2 and _timer < 7.0:
 		var spark_t := (_timer - 6.2) / 0.8
-		var target_x := bbq_x + 16.0
+		var target_x := bbq_x + 24.0
 		var sx := lerpf(bbq_x, target_x, spark_t)
-		var sy := lerpf(bbq_base_y - 19.0, bbq_base_y, spark_t) - sin(spark_t * PI) * 26.0
-		draw_rect(Rect2(Vector2(sx - 2.0, sy - 2.0), Vector2(4.0, 4.0)), Color("fff59d"))
-		draw_rect(Rect2(Vector2(sx - 1.0, sy - 1.0), Vector2(2.0, 2.0)), Color.WHITE)
+		var sy := lerpf(bbq_base_y - 27.0, bbq_base_y, spark_t) - sin(spark_t * PI) * 30.0
+		draw_rect(Rect2(Vector2(sx - 3.0, sy - 3.0), Vector2(6.0, 6.0)), Color("fff59d"))
+		draw_rect(Rect2(Vector2(sx - 1.5, sy - 1.5), Vector2(3.0, 3.0)), Color.WHITE)
 
-	# 2. Picnic Blanket & Basket
-	var blk_x := picnic_base_x + 28.0
-	var blk_w := 48.0
-	var blk_h := 10.0
+	# 2. Picnic Blanket & Basket (enlarged & clear)
+	var blk_x := picnic_base_x + 46.0
+	var blk_w := 72.0
+	var blk_h := 14.0
 	var picnic_burn := 0.0
 	if _timer >= 7.0:
 		picnic_burn = clampf((_timer - 7.0) / 1.8, 0.0, 1.0)
 
 	if picnic_burn < 1.0:
 		var blk_mod := Color.WHITE.lerp(Color("1a100a"), picnic_burn)
-		var tile_w := 8.0
-		var tile_h := 5.0
+		var tile_w := 12.0
+		var tile_h := 7.0
 		for row in 2:
 			for col in 6:
 				var is_red := (col + row) % 2 == 0
 				var t_col := Color("d32f2f") if is_red else Color("f5f5f5")
 				t_col = t_col * blk_mod
-				draw_rect(Rect2(blk_x + float(col) * tile_w, bbq_base_y - 4.0 + float(row) * tile_h, tile_w, tile_h), t_col)
+				draw_rect(Rect2(blk_x + float(col) * tile_w, bbq_base_y - 5.0 + float(row) * tile_h, tile_w, tile_h), t_col)
 
-		# Basket stays on blanket only if mom hasn't picked it up (before 3.5s)
+		# Basket on blanket (before departure at 3.5s)
 		if _timer < 3.5:
-			var basket_rect := Rect2(blk_x + 8.0, bbq_base_y - 16.0, 14.0, 12.0)
+			var basket_rect := Rect2(blk_x + 12.0, bbq_base_y - 22.0, 18.0, 16.0)
 			draw_rect(basket_rect, Color("8d5524"))
 			draw_line(Vector2(basket_rect.position.x, basket_rect.position.y), Vector2(basket_rect.position.x + basket_rect.size.x, basket_rect.position.y), Color("a06530"), 1.0)
-			draw_rect(Rect2(blk_x + 12.0, bbq_base_y - 16.0, 6.0, 5.0), Color.WHITE)
-			draw_rect(Rect2(blk_x + 32.0, bbq_base_y - 7.0, 4.0, 4.0), Color("e53935"))
+			draw_rect(Rect2(blk_x + 16.0, bbq_base_y - 22.0, 8.0, 7.0), Color.WHITE)
+			draw_rect(Rect2(blk_x + 48.0, bbq_base_y - 9.0, 6.0, 6.0), Color("e53935"))
 	else:
 		# Burnt ash smudge
-		draw_rect(Rect2(blk_x, bbq_base_y - 2.0, blk_w, 4.0), Color("170f0a"))
+		draw_rect(Rect2(blk_x, bbq_base_y - 3.0, blk_w, 6.0), Color("170f0a"))
 
-	# 3. Family Pixel Figures: Dad, Mom, Child walking away together!
+	# 3. Family Pixel Figures: Dad, Mom, Child
 	var is_walking := _timer >= 3.5
 	var walk_phase := _timer * 11.0
 
 	var dad_x: float
 	var mom_x: float
 	var kid_x: float
+	var is_holding := false
 
 	if not is_walking:
-		dad_x = bbq_x - 12.0
-		mom_x = blk_x + 14.0
-		kid_x = blk_x + 28.0
+		# Relaxed picnic positions: Dad flipping BBQ, Mom and Kid sitting on blanket
+		dad_x = bbq_x - 22.0
+		mom_x = blk_x + 22.0
+		kid_x = blk_x + 42.0
 	else:
-		# Group up and walk together as a unified family at identical speed
 		var walk_time := _timer - 3.5
-		var group_center := (blk_x + 22.0) + walk_time * 78.0
-		var form_t := clampf(walk_time / 0.5, 0.0, 1.0)
-		var start_dad := bbq_x - 12.0
-		var start_mom := blk_x + 14.0
-		var start_kid := blk_x + 28.0
+		var rendezvous_time := 0.65
+		if walk_time < rendezvous_time:
+			# Dad walks from grill toward blanket; Mom & Kid stand up and start stepping forward
+			var t := walk_time / rendezvous_time
+			dad_x = lerpf(bbq_x - 22.0, blk_x + 22.0, t)
+			mom_x = (blk_x + 22.0) + walk_time * 30.0
+			kid_x = (blk_x + 42.0) + walk_time * 30.0
+			is_holding = false # NO STRETCHY ARM! Dad hasn't reached them yet
+		else:
+			# Dad has arrived beside the family! Now grouped as a tight unit:
+			# Dad (left), Kid (middle), Mom (right)
+			var group_walk_time := walk_time - rendezvous_time
+			var base_group_x := (blk_x + 42.0) + rendezvous_time * 30.0 + group_walk_time * 78.0
+			dad_x = base_group_x - 14.0
+			kid_x = base_group_x
+			mom_x = base_group_x + 14.0
+			is_holding = true
 
-		dad_x = lerpf(start_dad, group_center - 13.0, form_t) + (1.0 - form_t) * walk_time * 78.0
-		kid_x = lerpf(start_kid, group_center, form_t) + (1.0 - form_t) * walk_time * 78.0
-		mom_x = lerpf(start_mom, group_center + 13.0, form_t) + (1.0 - form_t) * walk_time * 78.0
+	# Draw family while within screen bounds
+	if dad_x < size.x + 35.0 or mom_x < size.x + 35.0 or kid_x < size.x + 35.0:
+		# Only hold hands when Dad has actually reached the child!
+		if is_holding and dad_x < size.x + 25.0 and kid_x < size.x + 25.0 and mom_x < size.x + 25.0:
+			# Dad holds kid's left hand (short natural 5px line)
+			draw_line(Vector2(dad_x + 5.0, mid - 14.0), Vector2(kid_x - 3.5, mid - 10.0), Color("ffcc80"), 2.5)
+			# Mom holds kid's right hand (short natural 5px line)
+			draw_line(Vector2(mom_x - 5.0, mid - 14.0), Vector2(kid_x + 3.5, mid - 10.0), Color("ffcc80"), 2.5)
 
-		if form_t >= 1.0:
-			dad_x = group_center - 13.0
-			kid_x = group_center
-			mom_x = group_center + 13.0
-
-	# Draw family while on screen
-	if dad_x < size.x + 30.0 or mom_x < size.x + 30.0 or kid_x < size.x + 30.0:
-		# When walking together, draw hand holding between parents and child
-		if is_walking and dad_x < size.x + 20.0 and kid_x < size.x + 20.0 and mom_x < size.x + 20.0:
-			draw_line(Vector2(dad_x + 3.0, mid - 10.0), Vector2(kid_x - 2.0, mid - 8.0), Color("ffcc80"), 2.0)
-			draw_line(Vector2(mom_x - 3.0, mid - 10.0), Vector2(kid_x + 2.0, mid - 8.0), Color("ffcc80"), 2.0)
-
-		if dad_x < size.x + 30.0:
-			_draw_person(Vector2(dad_x, mid), "dad", walk_phase, is_walking)
-		if kid_x < size.x + 30.0:
-			_draw_person(Vector2(kid_x, mid), "kid", walk_phase, is_walking)
-		if mom_x < size.x + 30.0:
-			_draw_person(Vector2(mom_x, mid), "mom", walk_phase, is_walking)
+		if dad_x < size.x + 35.0:
+			_draw_person(Vector2(dad_x, mid), "dad", walk_phase, is_walking, is_holding)
+		if kid_x < size.x + 35.0:
+			_draw_person(Vector2(kid_x, mid), "kid", walk_phase, is_walking, is_holding)
+		if mom_x < size.x + 35.0:
+			_draw_person(Vector2(mom_x, mid), "mom", walk_phase, is_walking, is_holding)
 
 
-func _draw_person(pos: Vector2, person_type: String, walk_phase: float, is_walking: bool) -> void:
-	var leg_swing := sin(walk_phase) * 4.5 if is_walking else 0.0
+func _draw_person(pos: Vector2, person_type: String, walk_phase: float, is_walking: bool, is_holding: bool = false) -> void:
+	var leg_swing := sin(walk_phase) * 5.0 if is_walking else 0.0
 
 	if person_type == "dad":
-		# Legs
-		draw_line(Vector2(pos.x - 2.0, pos.y - 8.0), Vector2(pos.x - 2.0 - leg_swing, pos.y), Color("212121"), 2.0)
-		draw_line(Vector2(pos.x + 2.0, pos.y - 8.0), Vector2(pos.x + 2.0 + leg_swing, pos.y), Color("212121"), 2.0)
-		# Torso (Blue shirt)
-		draw_rect(Rect2(pos.x - 4.0, pos.y - 18.0, 8.0, 10.0), Color("1976d2"))
-		# Head (Skin tone)
-		draw_rect(Rect2(pos.x - 3.0, pos.y - 25.0, 6.0, 7.0), Color("ffcc80"))
-		# Hair (Dark brown)
-		draw_rect(Rect2(pos.x - 4.0, pos.y - 27.0, 8.0, 3.0), Color("4e342e"))
-		# If standing by grill, hold spatula towards grill
+		# Legs (12px tall, 3px thick)
+		draw_line(Vector2(pos.x - 3.0, pos.y - 12.0), Vector2(pos.x - 3.0 - leg_swing, pos.y), Color("212121"), 3.0)
+		draw_line(Vector2(pos.x + 3.0, pos.y - 12.0), Vector2(pos.x + 3.0 + leg_swing, pos.y), Color("212121"), 3.0)
+		# Torso (Blue shirt: 12x14 px)
+		draw_rect(Rect2(pos.x - 6.0, pos.y - 26.0, 12.0, 14.0), Color("1976d2"))
+		# Head (Skin: 10x10 px)
+		draw_rect(Rect2(pos.x - 5.0, pos.y - 36.0, 10.0, 10.0), Color("ffcc80"))
+		# Hair (Dark brown: 12x4 px)
+		draw_rect(Rect2(pos.x - 6.0, pos.y - 39.0, 12.0, 4.0), Color("4e342e"))
+
+		# Arms
 		if not is_walking:
-			draw_line(Vector2(pos.x + 3.0, pos.y - 14.0), Vector2(pos.x + 10.0, pos.y - 17.0), Color("ffcc80"), 2.0)
-			draw_rect(Rect2(pos.x + 10.0, pos.y - 19.0, 4.0, 3.0), Color("9e9e9e"))
+			# Standing by grill, holding spatula
+			draw_line(Vector2(pos.x + 4.0, pos.y - 20.0), Vector2(pos.x + 14.0, pos.y - 24.0), Color("ffcc80"), 2.5)
+			draw_rect(Rect2(pos.x + 14.0, pos.y - 27.0, 6.0, 4.0), Color("9e9e9e"))
+			draw_line(Vector2(pos.x - 5.0, pos.y - 24.0), Vector2(pos.x - 7.0, pos.y - 16.0), Color("ffcc80"), 2.5)
+		else:
+			# Left arm swings
+			draw_line(Vector2(pos.x - 6.0, pos.y - 24.0), Vector2(pos.x - 6.0 + leg_swing, pos.y - 14.0), Color("ffcc80"), 2.5)
+			# Right arm: if not holding hand yet, swings naturally
+			if not is_holding:
+				draw_line(Vector2(pos.x + 6.0, pos.y - 24.0), Vector2(pos.x + 6.0 - leg_swing, pos.y - 14.0), Color("ffcc80"), 2.5)
 
 	elif person_type == "mom":
 		if not is_walking:
-			# Sitting on blanket
-			draw_rect(Rect2(pos.x - 4.0, pos.y - 12.0, 8.0, 8.0), Color("fbc02d")) # Yellow dress
-			draw_rect(Rect2(pos.x - 3.0, pos.y - 19.0, 6.0, 7.0), Color("ffcc80")) # Head
-			draw_rect(Rect2(pos.x - 4.0, pos.y - 21.0, 8.0, 3.0), Color("5d4037")) # Hair
-			draw_rect(Rect2(pos.x - 5.0, pos.y - 18.0, 3.0, 6.0), Color("5d4037")) # Long hair
+			# Sitting on blanket (Yellow dress: 12x12 px)
+			draw_rect(Rect2(pos.x - 6.0, pos.y - 16.0, 12.0, 12.0), Color("fbc02d"))
+			draw_rect(Rect2(pos.x - 7.0, pos.y - 5.0, 14.0, 5.0), Color("e0a800"))
+			draw_rect(Rect2(pos.x - 5.0, pos.y - 26.0, 10.0, 10.0), Color("ffcc80"))
+			draw_rect(Rect2(pos.x - 6.0, pos.y - 29.0, 12.0, 4.0), Color("5d4037"))
+			draw_rect(Rect2(pos.x - 7.0, pos.y - 25.0, 4.0, 10.0), Color("5d4037"))
+			draw_line(Vector2(pos.x + 5.0, pos.y - 18.0), Vector2(pos.x + 2.0, pos.y - 10.0), Color("ffcc80"), 2.5)
 		else:
-			# Walking
-			draw_line(Vector2(pos.x - 2.0, pos.y - 7.0), Vector2(pos.x - 2.0 - leg_swing, pos.y), Color("d32f2f"), 2.0)
-			draw_line(Vector2(pos.x + 2.0, pos.y - 7.0), Vector2(pos.x + 2.0 + leg_swing, pos.y), Color("d32f2f"), 2.0)
-			draw_rect(Rect2(pos.x - 4.0, pos.y - 17.0, 8.0, 10.0), Color("fbc02d")) # Yellow dress
-			draw_rect(Rect2(pos.x - 3.0, pos.y - 24.0, 6.0, 7.0), Color("ffcc80"))
-			draw_rect(Rect2(pos.x - 4.0, pos.y - 26.0, 8.0, 3.0), Color("5d4037"))
-			# Carrying the picnic basket
-			draw_rect(Rect2(pos.x + 4.0, pos.y - 12.0, 8.0, 7.0), Color("8d5524"))
+			# Walking legs & yellow dress
+			draw_line(Vector2(pos.x - 3.0, pos.y - 10.0), Vector2(pos.x - 3.0 - leg_swing, pos.y), Color("d32f2f"), 2.5)
+			draw_line(Vector2(pos.x + 3.0, pos.y - 10.0), Vector2(pos.x + 3.0 + leg_swing, pos.y), Color("d32f2f"), 2.5)
+			draw_rect(Rect2(pos.x - 6.0, pos.y - 23.0, 12.0, 14.0), Color("fbc02d"))
+			draw_rect(Rect2(pos.x - 5.0, pos.y - 33.0, 10.0, 10.0), Color("ffcc80"))
+			draw_rect(Rect2(pos.x - 6.0, pos.y - 36.0, 12.0, 4.0), Color("5d4037"))
+			draw_rect(Rect2(pos.x - 7.0, pos.y - 32.0, 3.0, 8.0), Color("5d4037"))
+			# Carrying the picnic basket in outer hand
+			draw_rect(Rect2(pos.x + 6.0, pos.y - 17.0, 12.0, 10.0), Color("8d5524"))
+			draw_line(Vector2(pos.x + 6.0, pos.y - 21.0), Vector2(pos.x + 6.0, pos.y - 17.0), Color("ffcc80"), 2.5)
+			# Left arm: swings naturally if not holding yet
+			if not is_holding:
+				draw_line(Vector2(pos.x - 6.0, pos.y - 22.0), Vector2(pos.x - 6.0 + leg_swing, pos.y - 12.0), Color("ffcc80"), 2.5)
 
 	elif person_type == "kid":
-		# Small child (12px tall)
-		draw_line(Vector2(pos.x - 2.0, pos.y - 5.0), Vector2(pos.x - 2.0 - leg_swing, pos.y), Color("1e88e5"), 2.0)
-		draw_line(Vector2(pos.x + 2.0, pos.y - 5.0), Vector2(pos.x + 2.0 + leg_swing, pos.y), Color("1e88e5"), 2.0)
-		# Red shirt
-		draw_rect(Rect2(pos.x - 3.0, pos.y - 12.0, 6.0, 7.0), Color("e53935"))
-		# Head & cap
-		draw_rect(Rect2(pos.x - 2.0, pos.y - 18.0, 5.0, 6.0), Color("ffcc80"))
-		draw_rect(Rect2(pos.x - 3.0, pos.y - 19.0, 7.0, 2.0), Color("795548"))
+		if not is_walking:
+			# Sitting on blanket
+			draw_rect(Rect2(pos.x - 4.0, pos.y - 6.0, 8.0, 6.0), Color("1e88e5"))
+			draw_rect(Rect2(pos.x - 4.0, pos.y - 15.0, 8.0, 9.0), Color("e53935"))
+			draw_rect(Rect2(pos.x - 3.5, pos.y - 23.0, 7.0, 8.0), Color("ffcc80"))
+			draw_rect(Rect2(pos.x - 4.0, pos.y - 25.0, 9.0, 3.0), Color("795548"))
+		else:
+			# Walking legs (blue shorts)
+			draw_line(Vector2(pos.x - 2.5, pos.y - 7.0), Vector2(pos.x - 2.5 - leg_swing, pos.y), Color("1e88e5"), 2.5)
+			draw_line(Vector2(pos.x + 2.5, pos.y - 7.0), Vector2(pos.x + 2.5 + leg_swing, pos.y), Color("1e88e5"), 2.5)
+			# Red shirt
+			draw_rect(Rect2(pos.x - 4.0, pos.y - 16.0, 8.0, 9.0), Color("e53935"))
+			# Head & cap
+			draw_rect(Rect2(pos.x - 3.5, pos.y - 24.0, 7.0, 8.0), Color("ffcc80"))
+			draw_rect(Rect2(pos.x - 4.0, pos.y - 26.0, 9.0, 3.0), Color("795548"))
+			if not is_holding:
+				draw_line(Vector2(pos.x - 4.0, pos.y - 14.0), Vector2(pos.x - 4.0 - leg_swing, pos.y - 7.0), Color("ffcc80"), 2.0)
+				draw_line(Vector2(pos.x + 4.0, pos.y - 14.0), Vector2(pos.x + 4.0 + leg_swing, pos.y - 7.0), Color("ffcc80"), 2.0)
 
 
 func _draw_trees(size: Vector2, mid: float) -> void:
