@@ -26,7 +26,16 @@ const WATER_COLOR := Color("2980b9")
 const WATER_EDGE := Color("1f5f8b")
 const ACID_WATER_COLOR := Color("16a05d") # Greenish dark-turquoise for acid pools
 const ACID_WATER_EDGE := Color("0e6e3e")
-const ROOT_COLOR := Color("d8a36a")
+const ROOT_COLOR := Color("652300")
+
+# Retro Pixel-Art Bitmask Root Palette (Ağaç Gövdesi #652300 İle Birebir Uyumlu)
+const ROOT_BARK_DARK := Color("1b0800")
+const ROOT_BARK_SHADOW := Color("381300")
+const ROOT_WOOD_CORE := Color("652300")
+const ROOT_WOOD_GRAIN := Color("4e1a00")
+const ROOT_WOOD_LIGHT := Color("853609")
+const ROOT_TIP_COLOR := Color("aa4d18")
+const ROOT_WATER_FLOW := Color("54d6ff")
 
 const TILE_SIZE := 8.0
 const TOTAL_SOIL_ROWS := 100
@@ -126,6 +135,8 @@ var _game_over_reason: String = ""
 var _is_grow_btn_hovered: bool = false
 var _is_connected_to_water: bool = false
 var _active_water_intake_rate: float = 0.0
+var _water_pulse_time: float = 0.0
+var _water_flow_cells: Dictionary = {} # Vector2i -> int (distance from water contact)
 
 # Wind & Leaf oscillation configuration
 const WIND_SWAY_FREQ := 5.5
@@ -266,6 +277,12 @@ func _process(delta: float) -> void:
 
 	_is_connected_to_water = connected_now
 	_active_water_intake_rate = intake_this_frame
+	if _is_connected_to_water:
+		_water_pulse_time += delta
+		_update_water_flow_path()
+		needs_redraw = true
+	else:
+		_water_flow_cells.clear()
 
 	# Heat wave also drains 2L of water per second from our stored water bar
 	if _is_heatwave:
@@ -1570,16 +1587,18 @@ func _draw_soil_grid(size: Vector2, mid: float) -> void:
 			var tile_rect := Rect2(Vector2(x, y), Vector2(TILE_SIZE, TILE_SIZE))
 
 			var is_root: bool = _initial_root_tiles.has(cell) or _root_tiles.has(cell)
+			if is_root:
+				# Render retro pixel-art connective bitmask root tile
+				_draw_pixel_art_root(cell, Vector2(x, y), base_row_color)
+			else:
+				# 1. Base soil tile rendering
+				draw_rect(tile_rect, base_row_color)
 
-			# 1. Base tile rendering: Soil or Root
-			var base_tile_color := ROOT_COLOR if is_root else base_row_color
-			draw_rect(tile_rect, base_tile_color)
-
-			# 2. Bevel lines for soil/root
-			draw_line(Vector2(x, y), Vector2(x + TILE_SIZE, y), highlight_edge_color, 1.0)
-			draw_line(Vector2(x, y), Vector2(x, y + TILE_SIZE), highlight_edge_color, 1.0)
-			draw_line(Vector2(x, y + TILE_SIZE), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
-			draw_line(Vector2(x + TILE_SIZE, y), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
+				# 2. Bevel lines for soil grid (only on soil, never cutting through roots)
+				draw_line(Vector2(x, y), Vector2(x + TILE_SIZE, y), highlight_edge_color, 1.0)
+				draw_line(Vector2(x, y), Vector2(x, y + TILE_SIZE), highlight_edge_color, 1.0)
+				draw_line(Vector2(x, y + TILE_SIZE), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
+				draw_line(Vector2(x + TILE_SIZE, y), Vector2(x + TILE_SIZE, y + TILE_SIZE), grid_edge_color, 1.0)
 
 			# 3. Water overlay with top-to-bottom pixel fade/shrink
 			if _water_bank_lookup.has(cell):
@@ -1650,3 +1669,196 @@ func _draw_soil_grid(size: Vector2, mid: float) -> void:
 		var thumb_h := maxf(24.0, scroll_track_h * (visible_soil_height / (TOTAL_SOIL_ROWS * TILE_SIZE)))
 		var thumb_y := mid + (_soil_scroll_y / max_s) * (scroll_track_h - thumb_h)
 		draw_rect(Rect2(size.x - 5.0, thumb_y, 4.0, thumb_h), Color(1, 1, 1, 0.35))
+
+
+func _is_root_cell(c: Vector2i) -> bool:
+	if c.y < 0:
+		# Row 0 top connects seamlessly to the tree trunk base
+		var size := get_viewport_rect().size
+		var cols := int(ceil(size.x / TILE_SIZE))
+		var center_col := int(cols * 0.5)
+		return c.x >= center_col - 2 and c.x <= center_col + 1
+	return _initial_root_tiles.has(c) or _root_tiles.has(c)
+
+
+func _draw_pixel_art_root(cell: Vector2i, pos: Vector2, soil_col: Color) -> void:
+	var u: bool = _is_root_cell(cell + Vector2i(0, -1))
+	var d: bool = _is_root_cell(cell + Vector2i(0, 1))
+	var l: bool = _is_root_cell(cell + Vector2i(-1, 0))
+	var r: bool = _is_root_cell(cell + Vector2i(1, 0))
+
+	var ul: bool = _is_root_cell(cell + Vector2i(-1, -1))
+	var ur: bool = _is_root_cell(cell + Vector2i(1, -1))
+	var dl: bool = _is_root_cell(cell + Vector2i(-1, 1))
+	var dr: bool = _is_root_cell(cell + Vector2i(1, 1))
+
+	var px: float = pos.x
+	var py: float = pos.y
+
+	# 1. Base wood core fill (8x8)
+	draw_rect(Rect2(px, py, TILE_SIZE, TILE_SIZE), ROOT_WOOD_CORE)
+
+	# 2. Organic internal wood grain / rings
+	draw_rect(Rect2(px + 2.0, py + 2.0, 4.0, 4.0), ROOT_WOOD_LIGHT)
+	draw_rect(Rect2(px + 3.0, py + 3.0, 2.0, 2.0), ROOT_WOOD_GRAIN)
+
+	# 3. Outer Edge Borders & Highlights / Shadows
+	if not u:
+		draw_rect(Rect2(px, py, TILE_SIZE, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 1.0, 6.0, 1.0), ROOT_WOOD_LIGHT)
+	if not d:
+		draw_rect(Rect2(px, py + 7.0, TILE_SIZE, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 6.0, 6.0, 1.0), ROOT_BARK_SHADOW)
+	if not l:
+		draw_rect(Rect2(px, py, 1.0, TILE_SIZE), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 1.0, 1.0, 6.0), ROOT_WOOD_LIGHT)
+	if not r:
+		draw_rect(Rect2(px + 7.0, py, 1.0, TILE_SIZE), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 1.0, 1.0, 6.0), ROOT_BARK_SHADOW)
+
+	# 4. Convex Outer Corners (Pixel Chamfer for natural round roots)
+	if not u and not l:
+		draw_rect(Rect2(px, py, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 1.0, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px, py + 1.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 1.0, 1.0, 1.0), ROOT_WOOD_LIGHT)
+	if not u and not r:
+		draw_rect(Rect2(px + 7.0, py, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 6.0, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 7.0, py + 1.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 1.0, 1.0, 1.0), ROOT_WOOD_LIGHT)
+	if not d and not l:
+		draw_rect(Rect2(px, py + 7.0, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 1.0, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px, py + 6.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 6.0, 1.0, 1.0), ROOT_WOOD_LIGHT)
+	if not d and not r:
+		draw_rect(Rect2(px + 7.0, py + 7.0, 1.0, 1.0), soil_col)
+		draw_rect(Rect2(px + 6.0, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 7.0, py + 6.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 6.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+
+	# 5. Concave Inner Corners (Elbow Branch Notches)
+	if u and l and not ul:
+		draw_rect(Rect2(px, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 1.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if u and r and not ur:
+		draw_rect(Rect2(px + 7.0, py, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 1.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if d and l and not dl:
+		draw_rect(Rect2(px, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 1.0, py + 6.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+	if d and r and not dr:
+		draw_rect(Rect2(px + 7.0, py + 7.0, 1.0, 1.0), ROOT_BARK_DARK)
+		draw_rect(Rect2(px + 6.0, py + 6.0, 1.0, 1.0), ROOT_BARK_SHADOW)
+
+	# 6. Terminal Tip / Active Growth Point
+	var neighbor_count: int = (1 if u else 0) + (1 if d else 0) + (1 if l else 0) + (1 if r else 0)
+	var depth: int = _root_tiles.get(cell, 0)
+	if neighbor_count <= 1 and depth > 0:
+		draw_rect(Rect2(px + 3.0, py + 3.0, 2.0, 2.0), ROOT_TIP_COLOR)
+
+	# 7. Animated Water Absorption Pulse (Aşağıdan yukarıya, 5 piksel akış + yarım saniye duraksama)
+	if _is_connected_to_water and _water_flow_cells.has(cell):
+		var dist: int = _water_flow_cells[cell]
+		# 10 hücrelik döngü (hız=10): 5 hücrelik su akışı (0.5 sn) ardından 5 hücrelik duraksama (0.5 sn)
+		var wave: float = fmod(_water_pulse_time * 10.0 - float(dist), 10.0)
+		if wave >= 0.0 and wave < 5.0:
+			# 5 piksel boyunca ilerleyen mavi su akışı
+			draw_rect(Rect2(px + 2.0, py + 2.0, 4.0, 4.0), ROOT_WATER_FLOW)
+			# Dalganın öncü parlak su damlası
+			if wave < 1.6:
+				draw_rect(Rect2(px + 2.5, py + 2.5, 3.0, 3.0), Color.WHITE)
+
+
+func _update_water_flow_path() -> void:
+	_water_flow_cells.clear()
+	if not _is_connected_to_water:
+		return
+
+	# 1. Ağaç tabanından (satır 0) tüm bağlı köklere kesintisiz BFS yol haritası kur
+	var size := get_viewport_rect().size
+	var cols := int(ceil(size.x / TILE_SIZE))
+	var center_col := int(cols * 0.5)
+
+	var queue: Array[Vector2i] = []
+	var parent_map: Dictionary = {}
+	var dist_to_trunk: Dictionary = {}
+
+	for cx in range(center_col - 2, center_col + 2):
+		var root_base := Vector2i(cx, 0)
+		if _initial_root_tiles.has(root_base) or _root_tiles.has(root_base):
+			queue.append(root_base)
+			dist_to_trunk[root_base] = 0
+			parent_map[root_base] = root_base
+
+	var head := 0
+	while head < queue.size():
+		var curr: Vector2i = queue[head]
+		head += 1
+		var cur_d: int = dist_to_trunk[curr]
+
+		var neighbors := [
+			curr + Vector2i(0, 1),
+			curr + Vector2i(0, -1),
+			curr + Vector2i(1, 0),
+			curr + Vector2i(-1, 0),
+			curr + Vector2i(1, 1),
+			curr + Vector2i(-1, 1),
+			curr + Vector2i(1, -1),
+			curr + Vector2i(-1, -1)
+		]
+		for n in neighbors:
+			if not (_initial_root_tiles.has(n) or _root_tiles.has(n)):
+				continue
+			if not dist_to_trunk.has(n):
+				dist_to_trunk[n] = cur_d + 1
+				parent_map[n] = curr
+				queue.append(n)
+
+	# 2. Her aktif su kaynağından SADECE TEK BİR temas noktası seç (Kalınlığı 1 olan tek şerit akış için)
+	var contact_cells: Array[Vector2i] = []
+	for bank in _water_banks:
+		var rect: Rect2i = bank["rect"]
+		var drained: int = bank["drained_layers"]
+		var water_min_y := rect.position.y + drained
+		var water_max_y := rect.position.y + rect.size.y - 1
+		var water_min_x := rect.position.x
+		var water_max_x := rect.position.x + rect.size.x - 1
+		if water_min_y > water_max_y:
+			continue
+
+		var bank_contacts: Array[Vector2i] = []
+		for y in range(water_min_y - 1, water_max_y + 2):
+			for x in range(water_min_x - 1, water_max_x + 2):
+				if x >= water_min_x and x <= water_max_x and y >= water_min_y and y <= water_max_y:
+					continue
+				var c := Vector2i(x, y)
+				if (_initial_root_tiles.has(c) or _root_tiles.has(c)) and parent_map.has(c):
+					if not bank_contacts.has(c):
+						bank_contacts.append(c)
+
+		if bank_contacts.is_empty():
+			continue
+
+		# Suya temas eden hücreler arasından ağaca en yakın olan TEK BİR temas hücresini seç
+		var best_c := bank_contacts[0]
+		var min_d: int = dist_to_trunk[best_c]
+		for bc in bank_contacts:
+			if dist_to_trunk[bc] < min_d:
+				min_d = dist_to_trunk[bc]
+				best_c = bc
+		contact_cells.append(best_c)
+
+	# 3. Seçilen tek temas noktasından satır 0'a kadar tek şeritlik (kalınlığı 1) akış zincirini oluştur
+	for contact in contact_cells:
+		var curr := contact
+		var step_count := 0
+		while true:
+			if not _water_flow_cells.has(curr) or _water_flow_cells[curr] > step_count:
+				_water_flow_cells[curr] = step_count
+			if curr.y <= 0 or parent_map[curr] == curr:
+				break
+			curr = parent_map[curr]
+			step_count += 1
+
