@@ -115,6 +115,9 @@ var _tree_texture: Texture2D = null
 var _tree_white_texture: Texture2D = null
 var _vt323_font: Font = null
 var _root_grow_player: AudioStreamPlayer = null
+var _wind_player: AudioStreamPlayer = null
+var _rain_player: AudioStreamPlayer = null
+var _rock_player: AudioStreamPlayer = null
 const ROOT_SFX_HOLD_TIME := 0.14
 var _root_sfx_timer: float = 0.0
 var _water_stored: float = INITIAL_WATER # Starts at 50L (equivalent to 50px of water source)
@@ -213,6 +216,26 @@ func _ready() -> void:
 		_root_grow_player = AudioStreamPlayer.new()
 		_root_grow_player.stream = sfx_stream
 		add_child(_root_grow_player)
+	if ResourceLoader.exists("res://assets/wind.mp3"):
+		var wind_stream := load("res://assets/wind.mp3")
+		if wind_stream is AudioStreamMP3:
+			wind_stream.loop = true
+		_wind_player = AudioStreamPlayer.new()
+		_wind_player.stream = wind_stream
+		add_child(_wind_player)
+	if ResourceLoader.exists("res://assets/rain.mp3"):
+		var rain_stream := load("res://assets/rain.mp3")
+		if rain_stream is AudioStreamMP3:
+			rain_stream.loop = true
+		_rain_player = AudioStreamPlayer.new()
+		_rain_player.stream = rain_stream
+		add_child(_rain_player)
+	if ResourceLoader.exists("res://assets/rock.mp3"):
+		var rock_stream := load("res://assets/rock.mp3")
+		_rock_player = AudioStreamPlayer.new()
+		_rock_player.stream = rock_stream
+		_rock_player.volume_db = 6.0
+		add_child(_rock_player)
 	_wind_rng.randomize()
 	get_viewport().size_changed.connect(_on_size_changed)
 	_generate_world()
@@ -220,16 +243,41 @@ func _ready() -> void:
 	_init_acid_rain_drops()
 
 
+func _stop_all_looping_sfx() -> void:
+	if _root_grow_player and _root_grow_player.playing:
+		_root_grow_player.stop()
+	if _wind_player and _wind_player.playing:
+		_wind_player.stop()
+	if _rain_player and _rain_player.playing:
+		_rain_player.stop()
+
+
 func _process(delta: float) -> void:
 	if _is_paused:
-		if _root_grow_player and _root_grow_player.playing:
-			_root_grow_player.stop()
+		_stop_all_looping_sfx()
 		return
 
 	if _is_game_over:
-		if _root_grow_player and _root_grow_player.playing:
-			_root_grow_player.stop()
+		_stop_all_looping_sfx()
 		return
+
+	# Wind SFX: plays when the wind is active (tree is oscillating)
+	if _wind_player:
+		if _is_tree_oscillating():
+			if not _wind_player.playing:
+				_wind_player.play()
+		else:
+			if _wind_player.playing:
+				_wind_player.stop()
+
+	# Rain SFX: plays during acid rain
+	if _rain_player:
+		if _is_acid_rain:
+			if not _rain_player.playing:
+				_rain_player.play()
+		else:
+			if _rain_player.playing:
+				_rain_player.stop()
 
 	if _root_sfx_timer > 0.0:
 		_root_sfx_timer = maxf(0.0, _root_sfx_timer - delta)
@@ -436,8 +484,7 @@ func _restart_game() -> void:
 	_active_drag_Safe_tiles.clear()
 	_active_drag_history.clear()
 	_root_sfx_timer = 0.0
-	if _root_grow_player and _root_grow_player.playing:
-		_root_grow_player.stop()
+	_stop_all_looping_sfx()
 	_generate_world()
 	queue_redraw()
 
@@ -770,8 +817,7 @@ func _toggle_pause() -> void:
 	_active_drag_Safe_tiles.clear()
 	_active_drag_history.clear()
 	_root_sfx_timer = 0.0
-	if _root_grow_player and _root_grow_player.playing:
-		_root_grow_player.stop()
+	_stop_all_looping_sfx()
 	_pause_hovered_btn_idx = 0
 	queue_redraw()
 
@@ -976,6 +1022,7 @@ func _interact_at_pos(screen_pos: Vector2) -> void:
 
 	var target_cell := Vector2i(col, row)
 	var changed := false
+	var hit_rock := false
 
 	if _has_last_drag_cell:
 		# Step cell-by-cell along the drag line so fast mouse movement never skips tiles
@@ -987,11 +1034,19 @@ func _interact_at_pos(screen_pos: Vector2) -> void:
 				roundi(lerpf(float(_last_drag_cell.x), float(target_cell.x), t)),
 				roundi(lerpf(float(_last_drag_cell.y), float(target_cell.y), t))
 			)
+			if _rock_cells.has(interp_cell):
+				hit_rock = true
 			if _try_extend_root_at_cell(interp_cell):
 				changed = true
 	else:
+		if _rock_cells.has(target_cell):
+			hit_rock = true
 		if _try_extend_root_at_cell(target_cell):
 			changed = true
+
+	if hit_rock and _rock_player:
+		if not _rock_player.playing:
+			_rock_player.play()
 
 	_last_drag_cell = target_cell
 	_has_last_drag_cell = true
